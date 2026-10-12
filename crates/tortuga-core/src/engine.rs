@@ -522,8 +522,16 @@ impl Engine {
             .context(last_err.map(|e| format!("{e:#}")).unwrap_or_default())
     }
 
-    pub(crate) async fn start_session(&self, binding: Binding) -> anyhow::Result<()> {
+    pub(crate) async fn start_session(self: &Arc<Self>, binding: Binding) -> anyhow::Result<()> {
         let _g = self.restart_lock.lock().await;
+        // Metadata lookups own the old session too. Stop them before switching
+        // routes; otherwise magnets keep waiting on the discarded DHT/trackers.
+        for p in self.pending.lock().values_mut() {
+            if let Some(task) = p.task.take() {
+                task.abort();
+            }
+            p.resolved_id = None;
+        }
         self.restarting
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let old = self.session.write().take();
@@ -541,11 +549,23 @@ impl Engine {
         self.ticks.lock().clear();
         self.apply_limits();
         self.reconcile_all();
+        let pending: Vec<_> = self
+            .pending
+            .lock()
+            .iter()
+            .map(|(key, p)| (key.clone(), p.req.clone(), p.added_at))
+            .collect();
+        for (key, req, added_at) in pending {
+            if self.pending.lock().contains_key(&key) {
+                self.spawn_pending(key, req, added_at);
+            }
+        }
+        self.save_pending();
         Ok(())
     }
 
     /// Restart the session with new binding, keeping torrents.
-    pub(crate) async fn restart_with_binding(&self, binding: Binding) -> anyhow::Result<()> {
+    pub(crate) async fn restart_with_binding(self: &Arc<Self>, binding: Binding) -> anyhow::Result<()> {
         if *self.binding.read() == binding && self.session.read().is_some() {
             return Ok(());
         }
@@ -1868,6 +1888,15 @@ impl Engine {
     /// Aggregate download health used by the automatic network mode.
     pub(crate) fn health(&self) -> Health {
         let mut h = Health::default();
+        if !self.global_pause.lock().any() {
+            let start_paused = self.settings.read().start_paused;
+            h.downloading = self
+                .pending
+                .lock()
+                .values()
+                .filter(|p| p.error.is_none() && !p.req.paused.unwrap_or(start_paused))
+                .count() as u32;
+        }
         for t in self.handles() {
             let stats = t.stats();
             if let (TorrentStatsState::Live, false) = (&stats.state, stats.finished) {
