@@ -54,7 +54,9 @@ function useColumnWidths() {
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
-    const start = width(key);
+    // The name column may be wider than its setting (it takes the spare width).
+    const th = (e.currentTarget as HTMLElement).parentElement;
+    const start = th?.offsetWidth ?? width(key);
     let latest = custom;
     const move = (ev: globalThis.MouseEvent) => {
       latest = { ...latest, [key]: Math.max(MIN_WIDTH, Math.round(start + ev.clientX - startX)) };
@@ -106,11 +108,11 @@ export function TorrentTable({
     <div className="table-wrap" onMouseDown={(e) => e.target === e.currentTarget && onBackgroundClick()}>
       <table className="grid" style={{ width: `max(${total}px, 100%)` }}>
         <colgroup>
+          {/* The name column has no fixed width: it takes the spare width when the
+              columns are narrower than the window (and its own width otherwise). */}
           {columns.map((c) => (
-            <col key={c.key} style={{ width: cols.width(c.key) }} />
+            <col key={c.key} style={c.key === "name" ? undefined : { width: cols.width(c.key) }} />
           ))}
-          {/* Takes the spare width when the columns are narrower than the window. */}
-          <col />
         </colgroup>
         <thead>
           <tr>
@@ -130,7 +132,6 @@ export function TorrentTable({
                 />
               </th>
             ))}
-            <th className="filler" />
           </tr>
         </thead>
         <tbody>
@@ -161,7 +162,6 @@ export function TorrentTable({
               <td className="num dim">{fmt.speed(tr.up_speed, lang)}</td>
               <td className="num dim">{fmt.duration(tr.eta, lang)}</td>
               <td className="num dim">{tr.peers || tr.peers_seen ? `${tr.peers} (${tr.peers_seen})` : ""}</td>
-              <td />
             </tr>
           ))}
         </tbody>
