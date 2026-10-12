@@ -15,6 +15,9 @@ librqbit = { path = "vendor/librqbit" }
 # Patched copy of librqbit-dualstack-sockets 0.7.0: implements binding sockets
 # to a network interface on Windows (used to bypass / pin to a VPN).
 librqbit-dualstack-sockets = { path = "vendor/librqbit-dualstack-sockets" }
+# Patched copy of librqbit-tracker-comms 9.0.1: pluggable resolver for UDP
+# trackers (DNS-over-HTTPS fallback when the system DNS blocks them).
+librqbit-tracker-comms = { path = "vendor/librqbit-tracker-comms" }
 
 [profile.release]
 lto = "thin"

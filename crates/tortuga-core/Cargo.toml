@@ -10,6 +10,7 @@ name = "tortuga-server"
 path = "src/bin/tortuga-server.rs"
 
 [dependencies]
+librqbit-tracker-comms = "9"
 librqbit = { version = "9.0.1", default-features = false, features = ["rust-tls"] }
 anyhow = "1"
 axum = { version = "0.8", features = ["json", "query", "tokio", "http1"] }

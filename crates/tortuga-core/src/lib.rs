@@ -5,6 +5,7 @@
 //! VPN-aware network routing, and a local HTTP API with streaming.
 
 pub mod create;
+pub mod dns;
 pub mod engine;
 pub mod meta;
 pub mod net;

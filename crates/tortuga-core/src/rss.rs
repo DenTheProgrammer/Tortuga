@@ -314,6 +314,7 @@ pub async fn refresh_feed(engine: &Arc<Engine>, feed_id: &str) -> anyhow::Result
         .context("feed not found")?;
     let client = reqwest::Client::builder()
         .user_agent(concat!("Tortuga/", env!("CARGO_PKG_VERSION")))
+        .dns_resolver(crate::dns::reqwest_resolver())
         .build()?;
     let res = async { parse_feed(&feed.id, &fetch(&client, &feed.url).await?) }.await;
 

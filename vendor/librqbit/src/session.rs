@@ -482,6 +482,11 @@ pub struct SessionOptions {
     /// same interface as peer traffic.
     pub bind_local_ip: Option<std::net::IpAddr>,
 
+    /// Tortuga patch: hostname resolver for HTTP(S) trackers and .torrent
+    /// URLs (e.g. falling back to DNS-over-HTTPS when the system DNS filters
+    /// tracker names). None = the system resolver.
+    pub dns_resolver: Option<std::sync::Arc<dyn reqwest::dns::Resolve>>,
+
     /// Force IPv4 only.
     pub ipv4_only: bool,
 
@@ -496,6 +501,7 @@ impl Default for SessionOptions {
             dht: Some(DhtSessionConfig::default()),
             bind_device_name: None,
             bind_local_ip: None,
+            dns_resolver: None,
             disable_trackers: false,
             fastresume: false,
             persistence: None,
@@ -733,6 +739,10 @@ impl Session {
                     b
                 };
 
+                let builder = match opts.dns_resolver.clone() {
+                    Some(r) => builder.dns_resolver(r),
+                    None => builder,
+                };
                 builder
                     .user_agent(&client_name_and_version)
                     .build()

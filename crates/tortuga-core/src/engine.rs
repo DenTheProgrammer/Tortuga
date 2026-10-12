@@ -408,6 +408,7 @@ impl Engine {
             token: token.unwrap_or_else(crate::util::random_token),
         });
 
+        crate::dns::install_udp_tracker_resolver();
         let binding = crate::netguard::initial_binding(&engine);
         engine.start_session(binding).await?;
         engine.apply_scheduler();
@@ -449,8 +450,16 @@ impl Engine {
         std::fs::create_dir_all(&s.download_dir)
             .with_context(|| format!("can't create {}", s.download_dir.display()))?;
 
+        // Resolved with a DNS-over-HTTPS fallback: filtering DNS (AdGuard etc.)
+        // often blocks these names, leaving DHT with no way in.
+        let bootstrap = if s.dht {
+            Some(crate::dns::dht_bootstrap_addrs().await)
+        } else {
+            None
+        };
         let make_opts = |port: u16, ipv4_only: bool| SessionOptions {
             dht: s.dht.then(|| DhtSessionConfig {
+                bootstrap_addrs: bootstrap.clone(),
                 persistence: Some(DhtPersistenceConfig {
                     config_filename: Some(self.data_dir.join("dht.json")),
                     ..Default::default()
@@ -485,6 +494,7 @@ impl Engine {
             disable_local_service_discovery: !s.lsd,
             bind_device_name: binding.device.clone(),
             bind_local_ip: binding.local_ip,
+            dns_resolver: Some(crate::dns::reqwest_resolver()),
             client_name_and_version: Some(format!("Tortuga/{}", env!("CARGO_PKG_VERSION"))),
             ipv4_only,
             ..Default::default()
@@ -1403,7 +1413,9 @@ impl Engine {
         let h = self.handle(id)?;
         self.meta.update(id, |m| m.user_paused = true);
         let _ = self.meta.save();
-        if !h.is_paused() {
+        // While checking files the torrent can't be paused yet; the tick's
+        // `sync_run_state` pauses it as soon as the check is done.
+        if matches!(h.stats().state, TorrentStatsState::Live) {
             self.session()?.pause(&h).await?;
         }
         Ok(())
@@ -1423,7 +1435,7 @@ impl Engine {
         }
         self.meta.update(id, |m| m.user_paused = false);
         let _ = self.meta.save();
-        if h.is_paused() && !self.global_pause.lock().any() {
+        if matches!(h.stats().state, TorrentStatsState::Paused) && !self.global_pause.lock().any() {
             self.session()?.unpause(&h).await?;
         }
         Ok(())
