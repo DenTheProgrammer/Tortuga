@@ -87,6 +87,7 @@ async fn check(app: &AppHandle) -> anyhow::Result<Option<UpdateInfo>> {
     let current = app.package_info().version.clone();
     let newer = parse_version(&release.tag_name).is_some_and(|v| v > current);
     if !newer || release.draft || release.prerelease {
+        *app.state::<UpdateState>().pending.lock() = None;
         return Ok(None);
     }
     if cfg!(windows) && installer(&release).is_none() {
