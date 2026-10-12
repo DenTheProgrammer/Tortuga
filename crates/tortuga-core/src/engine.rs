@@ -565,7 +565,10 @@ impl Engine {
     }
 
     /// Restart the session with new binding, keeping torrents.
-    pub(crate) async fn restart_with_binding(self: &Arc<Self>, binding: Binding) -> anyhow::Result<()> {
+    pub(crate) async fn restart_with_binding(
+        self: &Arc<Self>,
+        binding: Binding,
+    ) -> anyhow::Result<()> {
         if *self.binding.read() == binding && self.session.read().is_some() {
             return Ok(());
         }

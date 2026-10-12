@@ -199,7 +199,7 @@ fn set_status(engine: &Engine, snap: &NetSnapshot, d: &Decision) -> bool {
     changed
 }
 
-pub(crate) async fn evaluate(engine: &Engine) {
+pub(crate) async fn evaluate(engine: &Arc<Engine>) {
     let snap = tokio::task::spawn_blocking(net::snapshot)
         .await
         .unwrap_or_else(|_| net::snapshot());
