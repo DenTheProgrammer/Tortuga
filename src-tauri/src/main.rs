@@ -316,6 +316,15 @@ fn quit(app: &AppHandle) {
 }
 
 fn main() {
+    // Run by the installer's "open .torrent and magnet links with Tortuga"
+    // checkbox: register and show Windows' Default apps page, no window.
+    if std::env::args().any(|a| a == "--make-default") {
+        if let Err(e) = assoc::make_default() {
+            eprintln!("can't register Tortuga as the default app: {e}");
+        }
+        return;
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
