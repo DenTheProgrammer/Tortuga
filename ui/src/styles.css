@@ -273,7 +273,7 @@ button {
   cursor: default;
 }
 
-.topbar .icon-btn:not(:disabled) { color: var(--text); }
+.topbar .torrent-action:not(:disabled) { color: var(--text); }
 
 .icon-btn.on {
   color: var(--accent);

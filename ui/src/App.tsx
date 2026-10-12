@@ -536,14 +536,14 @@ export default function App() {
             <PackagePlus />
           </button>
           <div className="sep" />
-          <button className="icon-btn" title={t("start")} disabled={actionBusy || !startIds.length} onClick={() => act(api.resume, startIds)}>
+          <button className="icon-btn torrent-action" title={t("start")} disabled={actionBusy || !startIds.length} onClick={() => act(api.resume, startIds)}>
             <Play />
           </button>
-          <button className="icon-btn" title={t("pause")} disabled={actionBusy || !pauseIds.length} onClick={() => act(api.pause, pauseIds)}>
+          <button className="icon-btn torrent-action" title={t("pause")} disabled={actionBusy || !pauseIds.length} onClick={() => act(api.pause, pauseIds)}>
             <Pause />
           </button>
           <button
-            className="icon-btn"
+            className="icon-btn torrent-action"
             title={t("remove")}
             disabled={actionBusy || !selectedList.length}
             onClick={() => setConfirmRemove({ ids: [...selected], files: false })}

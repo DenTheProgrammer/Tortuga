@@ -3,3 +3,5 @@ node_modules/
 /ui/dist
 *.log
 .DS_Store
+/tools/benchmark/apps/
+/tools/benchmark/results/
