@@ -74,6 +74,11 @@ pub struct Settings {
     pub start_minimized: bool,
     pub notify_on_complete: bool,
 
+    // Streaming: "builtin", "system", "vlc", "mpv", "mpc-hc", "mpc-be", "potplayer" or "custom".
+    pub player: String,
+    /// Executable for the "custom" player (or to override detection).
+    pub player_path: Option<String>,
+
     // Downloads
     pub download_dir: PathBuf,
     pub default_sequential: bool,
@@ -109,6 +114,8 @@ impl Default for Settings {
             close_to_tray: true,
             start_minimized: false,
             notify_on_complete: true,
+            player: "builtin".into(),
+            player_path: None,
             download_dir: default_download_dir(),
             default_sequential: false,
             start_paused: false,
