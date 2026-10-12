@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = ["crates/tortuga-core"]
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[patch.crates-io]
+# Patched copy of librqbit 9.0.1: adds per-file priority tiers and
+# sequential/random piece picking (see vendor/librqbit/src/piece_priority.rs).
+librqbit = { path = "vendor/librqbit" }
+# Patched copy of librqbit-dualstack-sockets 0.7.0: implements binding sockets
+# to a network interface on Windows (used to bypass / pin to a VPN).
+librqbit-dualstack-sockets = { path = "vendor/librqbit-dualstack-sockets" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true

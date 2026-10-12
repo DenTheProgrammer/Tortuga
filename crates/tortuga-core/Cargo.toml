@@ -1,0 +1,8 @@
+[package]
+name = "tortuga-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+librqbit = { version = "9.0.1", default-features = false, features = ["rust-tls"] }
