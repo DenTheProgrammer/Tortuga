@@ -35,11 +35,32 @@ pub type TorrentHandle = Arc<ManagedTorrent>;
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Event {
-    Completed { id: String, name: String },
-    Added { id: String, name: String },
-    Error { id: Option<String>, message: String },
-    NetworkChanged { status: NetStatus },
-    RssDownloaded { title: String, feed: String },
+    Completed {
+        id: String,
+        name: String,
+    },
+    Added {
+        id: String,
+        name: String,
+    },
+    Error {
+        id: Option<String>,
+        message: String,
+    },
+    NetworkChanged {
+        status: NetStatus,
+    },
+    RssDownloaded {
+        title: String,
+        feed: String,
+    },
+    /// Files of a torrent disappeared from disk while Tortuga was not running.
+    FilesMissing {
+        id: String,
+        name: String,
+        files: usize,
+        all: bool,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -235,6 +256,7 @@ pub struct Engine {
     scheduler_slot: Mutex<ScheduleSlot>,
     speed_history: Mutex<VecDeque<(i64, u64, u64)>>,
     events: broadcast::Sender<Event>,
+    pub(crate) cancel: tokio_util::sync::CancellationToken,
     pub token: String,
 }
 
@@ -362,6 +384,7 @@ impl Engine {
             scheduler_slot: Mutex::new(ScheduleSlot::Normal),
             speed_history: Default::default(),
             events,
+            cancel: Default::default(),
             token: token.unwrap_or_else(crate::util::random_token),
         });
 
@@ -1258,6 +1281,16 @@ impl Engine {
 
     pub async fn resume(&self, id: &str) -> anyhow::Result<()> {
         let h = self.handle(id)?;
+        // Starting a torrent whose files were all deleted / skipped downloads it again.
+        let all_skipped = {
+            let m = self.meta.get(id).unwrap_or_default();
+            !m.priorities.is_empty() && m.priorities.iter().all(|p| *p == FilePriority::Skip)
+        };
+        if all_skipped {
+            let n = self.meta.get(id).unwrap_or_default().priorities.len();
+            let changes = (0..n).map(|i| (i, FilePriority::Normal)).collect();
+            self.set_file_priorities(id, &changes).await?;
+        }
         self.meta.update(id, |m| m.user_paused = false);
         let _ = self.meta.save();
         if h.is_paused() && !self.global_pause.lock().any() {
@@ -1323,6 +1356,14 @@ impl Engine {
         }
         h.set_piece_priority(Some(meta.piece_priority(n)))?;
         Ok(())
+    }
+
+    pub fn add_peers(&self, id: &str, peers: &[String]) -> anyhow::Result<usize> {
+        let addrs: Vec<SocketAddr> = peers.iter().filter_map(|p| p.trim().parse().ok()).collect();
+        if addrs.is_empty() {
+            bail!("expected peers as ip:port");
+        }
+        Ok(self.handle(id)?.add_peers(&addrs))
     }
 
     /// "Download in order": the given files get high priority and the torrent
@@ -1456,7 +1497,10 @@ impl Engine {
             let mut i: u64 = 0;
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             loop {
-                interval.tick().await;
+                tokio::select! {
+                    _ = this.cancel.cancelled() => break,
+                    _ = interval.tick() => {}
+                }
                 i += 1;
                 this.tick();
                 if i.is_multiple_of(30) {
@@ -1471,7 +1515,54 @@ impl Engine {
         crate::rss::spawn(self);
     }
 
-    fn tick(&self) {
+    /// Stop background work and the BitTorrent session, saving state.
+    pub async fn shutdown(&self) {
+        self.cancel.cancel();
+        let _ = self.meta.save();
+        let session = self.session.write().take();
+        if let Some(s) = session {
+            s.stop().await;
+        }
+    }
+
+    /// React to files that vanished from disk while we were not running
+    /// (detected by the patched startup check in librqbit).
+    fn handle_missing_files(self: &Arc<Self>, h: &TorrentHandle) {
+        if matches!(h.stats().state, TorrentStatsState::Initializing { .. }) {
+            return;
+        }
+        let missing = h.shared().take_missing_files();
+        if missing.is_empty() {
+            return;
+        }
+        let id = hash_str(&h.info_hash());
+        let name = h.name().unwrap_or_else(|| id.clone());
+        let nothing_left = h.stats().progress_bytes == 0;
+        let this = self.clone();
+        tokio::spawn(async move {
+            let res = if nothing_left {
+                // The whole download is gone: stop and wait for the user.
+                // Pressing "Start" downloads it again.
+                this.pause(&id).await
+            } else {
+                // Some files were deleted, most likely on purpose (e.g. a watched
+                // episode): don't download them again unless the user asks.
+                let changes = missing.iter().map(|f| (*f, FilePriority::Skip)).collect();
+                this.set_file_priorities(&id, &changes).await
+            };
+            if let Err(e) = res {
+                warn!(%id, "error handling missing files: {e:#}");
+            }
+            this.emit(Event::FilesMissing {
+                id,
+                name,
+                files: missing.len(),
+                all: nothing_left,
+            });
+        });
+    }
+
+    fn tick(self: &Arc<Self>) {
         // Session-wide speed history for the graph.
         if let Some(s) = self.session.read().as_ref() {
             let st = s.stats_snapshot();
@@ -1489,6 +1580,7 @@ impl Engine {
 
         let ratio_limit = self.settings.read().seed_ratio_limit;
         for h in self.handles() {
+            self.handle_missing_files(&h);
             let id = hash_str(&h.info_hash());
             let stats = h.stats();
             let Some(live) = stats.live.as_ref() else {
@@ -1573,9 +1665,20 @@ mod tests {
     #[test]
     fn series_detection() {
         let gb = 1 << 30;
-        assert!(looks_like_series([("e1.mkv", gb), ("e2.mkv", gb), ("s.srt", 1000)]));
-        assert!(!looks_like_series([("movie.mkv", 4 * gb), ("poster.jpg", 100_000)]));
-        assert!(!looks_like_series([("a.mp4", 1), ("b.mp4", 1), ("game.iso", gb)]));
+        assert!(looks_like_series([
+            ("e1.mkv", gb),
+            ("e2.mkv", gb),
+            ("s.srt", 1000)
+        ]));
+        assert!(!looks_like_series([
+            ("movie.mkv", 4 * gb),
+            ("poster.jpg", 100_000)
+        ]));
+        assert!(!looks_like_series([
+            ("a.mp4", 1),
+            ("b.mp4", 1),
+            ("game.iso", gb)
+        ]));
     }
 }
 

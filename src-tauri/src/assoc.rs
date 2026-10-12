@@ -135,7 +135,12 @@ mod imp {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         std::process::Command::new("cmd")
-            .args(["/C", "start", "", &format!("ms-settings:defaultapps?registeredAppUser={APP}")])
+            .args([
+                "/C",
+                "start",
+                "",
+                &format!("ms-settings:defaultapps?registeredAppUser={APP}"),
+            ])
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()?;
         Ok(())

@@ -195,9 +195,18 @@ pub struct ManagedTorrentShared {
     pub(crate) magnet_name: Option<String>,
 
     pub(crate) client_name_and_version: String,
+
+    /// Tortuga patch: files found missing or truncated on disk during the
+    /// startup check; their pieces were dropped instead of a full recheck.
+    pub(crate) missing_files: parking_lot::Mutex<Vec<usize>>,
 }
 
 impl ManagedTorrentShared {
+    /// Tortuga patch: take the list of files that were missing on disk at startup.
+    pub fn take_missing_files(&self) -> Vec<usize> {
+        std::mem::take(&mut *self.missing_files.lock())
+    }
+
     pub(crate) fn client_name_and_version(&self) -> &str {
         &self.client_name_and_version
     }
@@ -626,6 +635,16 @@ impl ManagedTorrent {
         }
         g.piece_priority = config;
         Ok(())
+    }
+
+    /// Tortuga patch: connect to extra peers (e.g. "add peer" in the UI).
+    /// Returns how many were new. No-op unless the torrent is live.
+    pub fn add_peers(&self, addrs: &[std::net::SocketAddr]) -> usize {
+        let Some(live) = self.live() else { return 0 };
+        addrs
+            .iter()
+            .filter(|a| live.add_peer_if_not_seen(**a).unwrap_or(false))
+            .count()
     }
 
     pub fn piece_priority(&self) -> Option<crate::piece_priority::PiecePriorityConfig> {

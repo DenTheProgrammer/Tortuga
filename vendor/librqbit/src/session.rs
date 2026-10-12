@@ -1377,6 +1377,7 @@ impl Session {
                 session: Arc::downgrade(self),
                 magnet_name: name,
                 client_name_and_version: self.client_name_and_version.clone(),
+                missing_files: Default::default(),
             });
 
             let initializing = Arc::new(TorrentStateInitializing::new(

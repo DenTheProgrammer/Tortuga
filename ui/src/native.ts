@@ -167,3 +167,21 @@ export async function makeDefaultHandler() {
   if (!isTauri) return;
   await invoke("make_default_handler");
 }
+
+export interface UpdateInfo {
+  version: string;
+  current_version: string;
+  notes: string | null;
+}
+
+/** Calls `cb` with an available update (now or when one is found later). */
+export async function onUpdateAvailable(cb: (u: UpdateInfo) => void) {
+  if (!isTauri) return () => {};
+  const now = await invoke<UpdateInfo | null>("pending_update");
+  if (now) cb(now);
+  return listen<UpdateInfo>("update-available", (e) => cb(e.payload));
+}
+
+export async function installUpdate() {
+  await invoke("install_update");
+}

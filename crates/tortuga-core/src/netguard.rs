@@ -213,7 +213,10 @@ pub(crate) fn spawn(engine: Arc<Engine>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         loop {
-            interval.tick().await;
+            tokio::select! {
+                _ = engine.cancel.cancelled() => break,
+                _ = interval.tick() => {}
+            }
             evaluate(&engine).await;
         }
     });

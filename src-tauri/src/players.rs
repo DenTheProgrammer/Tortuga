@@ -45,7 +45,11 @@ const KNOWN: &[Known] = &[
         exe: &["mpv"],
         windows: &[r"mpv\mpv.exe", r"Programs\mpv\mpv.exe"],
         registry: &[],
-        macos: &["/Applications/mpv.app/Contents/MacOS/mpv", "/opt/homebrew/bin/mpv", "/usr/local/bin/mpv"],
+        macos: &[
+            "/Applications/mpv.app/Contents/MacOS/mpv",
+            "/opt/homebrew/bin/mpv",
+            "/usr/local/bin/mpv",
+        ],
         title_arg: Some("--force-media-title="),
     },
     Known {
@@ -75,8 +79,14 @@ const KNOWN: &[Known] = &[
         id: "potplayer",
         name: "PotPlayer",
         exe: &["PotPlayerMini64", "PotPlayerMini"],
-        windows: &[r"DAUM\PotPlayer\PotPlayerMini64.exe", r"DAUM\PotPlayer\PotPlayerMini.exe"],
-        registry: &[(r"Software\DAUM\PotPlayer64", "ProgramPath"), (r"Software\DAUM\PotPlayer", "ProgramPath")],
+        windows: &[
+            r"DAUM\PotPlayer\PotPlayerMini64.exe",
+            r"DAUM\PotPlayer\PotPlayerMini.exe",
+        ],
+        registry: &[
+            (r"Software\DAUM\PotPlayer64", "ProgramPath"),
+            (r"Software\DAUM\PotPlayer", "ProgramPath"),
+        ],
         macos: &[],
         title_arg: None,
     },
@@ -153,11 +163,16 @@ fn find(k: &Known) -> Option<PathBuf> {
                 return Some(p);
             }
         }
-        let roots: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "LOCALAPPDATA"]
-            .iter()
-            .filter_map(std::env::var_os)
-            .map(PathBuf::from)
-            .collect();
+        let roots: Vec<PathBuf> = [
+            "ProgramFiles",
+            "ProgramFiles(x86)",
+            "ProgramW6432",
+            "LOCALAPPDATA",
+        ]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .collect();
         for root in &roots {
             for rel in k.windows {
                 let p = root.join(rel);
@@ -226,7 +241,13 @@ fn playlist(url: &str, title: &str) -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(&dir)?;
     let safe: String = title
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .take(60)
         .collect();
     let path = dir.join(format!("{safe}.m3u"));
@@ -276,7 +297,9 @@ fn open_with_default(path: &Path) -> anyhow::Result<()> {
         let mut cmd = Command::new("cmd");
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.args(["/C", "start", ""]).arg(path).creation_flags(CREATE_NO_WINDOW);
+        cmd.args(["/C", "start", ""])
+            .arg(path)
+            .creation_flags(CREATE_NO_WINDOW);
         cmd.spawn()?;
         Ok(())
     }

@@ -217,6 +217,9 @@ const ru = {
   connectError: "Не удалось подключиться к движку Tortuga",
   restarting: "Перезапуск сети…",
   infinity: "∞",
+  updateAvailable: "Доступна новая версия Tortuga",
+  updateNow: "Обновить и перезапустить",
+  updating: "Обновляем…",
 };
 
 export type Dict = typeof ru;
@@ -428,6 +431,9 @@ const en: Dict = {
   connectError: "Can't connect to the Tortuga engine",
   restarting: "Restarting network…",
   infinity: "∞",
+  updateAvailable: "A new Tortuga version is available:",
+  updateNow: "Update and restart",
+  updating: "Updating…",
 };
 
 export const dicts: Record<string, Dict> = { ru, en };

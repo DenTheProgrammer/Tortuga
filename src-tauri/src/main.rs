@@ -3,6 +3,7 @@
 
 mod assoc;
 mod players;
+mod updates;
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
@@ -96,7 +97,12 @@ async fn detect_players() -> Vec<players::PlayerInfo> {
 }
 
 #[tauri::command]
-fn open_in_player(url: String, title: String, player: String, player_path: Option<String>) -> Result<(), String> {
+fn open_in_player(
+    url: String,
+    title: String,
+    player: String,
+    player_path: Option<String>,
+) -> Result<(), String> {
     players::open(&url, &title, &player, player_path.as_deref()).map_err(|e| format!("{e:#}"))
 }
 
@@ -129,9 +135,27 @@ fn fmt_speed(bps: u64) -> String {
 
 fn setup_tray(app: &AppHandle, engine: Arc<Engine>) -> tauri::Result<()> {
     let lang = engine.settings().language;
-    let show = MenuItem::with_id(app, "show", tr(&lang, "Открыть Tortuga", "Open Tortuga"), true, None::<&str>)?;
-    let resume = MenuItem::with_id(app, "resume_all", tr(&lang, "Запустить все", "Resume all"), true, None::<&str>)?;
-    let pause = MenuItem::with_id(app, "pause_all", tr(&lang, "Приостановить все", "Pause all"), true, None::<&str>)?;
+    let show = MenuItem::with_id(
+        app,
+        "show",
+        tr(&lang, "Открыть Tortuga", "Open Tortuga"),
+        true,
+        None::<&str>,
+    )?;
+    let resume = MenuItem::with_id(
+        app,
+        "resume_all",
+        tr(&lang, "Запустить все", "Resume all"),
+        true,
+        None::<&str>,
+    )?;
+    let pause = MenuItem::with_id(
+        app,
+        "pause_all",
+        tr(&lang, "Приостановить все", "Pause all"),
+        true,
+        None::<&str>,
+    )?;
     let turtle = CheckMenuItem::with_id(
         app,
         "turtle",
@@ -239,6 +263,23 @@ fn spawn_notifications(app: AppHandle, engine: Arc<Engine>) {
                     (tr(lang, "Загрузка завершена", "Download complete").to_owned(), name)
                 }
                 Event::RssDownloaded { title, feed } => (format!("RSS: {feed}"), title),
+                Event::FilesMissing { name, all, .. } => (
+                    name,
+                    if all {
+                        tr(
+                            lang,
+                            "Файлы удалены с диска. Торрент на паузе — нажмите «Запустить», чтобы скачать заново.",
+                            "Files were deleted. The torrent is paused — press Start to download again.",
+                        )
+                    } else {
+                        tr(
+                            lang,
+                            "Часть файлов удалена с диска — они больше не качаются. Включить можно во вкладке «Файлы».",
+                            "Some files were deleted — they won't be downloaded again. Re-enable them in the Files tab.",
+                        )
+                    }
+                    .to_owned(),
+                ),
                 Event::NetworkChanged { status } => match status.route {
                     Route::Direct if status.vpn_active && status.reason.starts_with("auto") => (
                         "Tortuga".to_owned(),
@@ -287,7 +328,12 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updates::UpdateState::default())
         .invoke_handler(tauri::generate_handler![
+            updates::pending_update,
+            updates::check_update,
+            updates::install_update,
             backend_info,
             take_pending_sources,
             detect_players,
@@ -342,6 +388,7 @@ fn main() {
 
             setup_tray(&handle, engine.clone())?;
             spawn_notifications(handle.clone(), engine.clone());
+            updates::spawn(handle.clone());
 
             if !settings.start_minimized || !app.state::<AppState>().pending.lock().is_empty() {
                 show_main(&handle);

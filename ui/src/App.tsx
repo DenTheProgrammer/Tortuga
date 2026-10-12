@@ -20,6 +20,8 @@ import {
   Search,
   Settings as SettingsIcon,
   Shield,
+  Sparkles,
+  X,
   ShieldAlert,
   ShieldOff,
   Sun,
@@ -42,6 +44,9 @@ import {
   localStorageSet,
   onFileDrop,
   onOpenSource,
+  onUpdateAvailable,
+  installUpdate,
+  UpdateInfo,
   openInPlayer,
   openPath,
   PlayerInfo,
@@ -96,6 +101,8 @@ export default function App() {
   const [player, setPlayer] = useState<{ url: string; name: string } | null>(null);
   const [players, setPlayers] = useState<PlayerInfo[]>([]);
   const [dragging, setDragging] = useState(false);
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [updating, setUpdating] = useState(false);
   const [detailsHeight, setDetailsHeight] = useState(() => Number(localStorageGet("tortuga.details")) || 300);
   const toast = useToast();
 
@@ -164,6 +171,7 @@ export default function App() {
     const unsubs: Promise<() => void>[] = [
       onOpenSource((source) => setAddSource({ source })),
       onFileDrop((paths) => paths[0] && setAddSource({ source: paths[0] })),
+      onUpdateAvailable(setUpdate),
     ];
     return () => unsubs.forEach((u) => u.then((f) => f()));
   }, [ready]);
@@ -574,6 +582,30 @@ export default function App() {
           </div>
 
           <div className="main">
+            {update && (
+              <div className="banner">
+                <Sparkles />
+                <span>
+                  {t("updateAvailable")} <b>{update.version}</b>
+                </span>
+                <button
+                  className="btn primary"
+                  disabled={updating}
+                  onClick={() => {
+                    setUpdating(true);
+                    installUpdate().catch((e) => {
+                      setUpdating(false);
+                      err(e);
+                    });
+                  }}
+                >
+                  {updating ? t("updating") : t("updateNow")}
+                </button>
+                <button className="icon-btn" onClick={() => setUpdate(null)} aria-label="close">
+                  <X />
+                </button>
+              </div>
+            )}
             {filter === "rss" ? (
               <RssView />
             ) : (

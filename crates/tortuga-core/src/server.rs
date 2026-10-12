@@ -249,6 +249,19 @@ async fn h_in_order(
     Ok(ok())
 }
 
+#[derive(Deserialize)]
+struct PeersBody {
+    peers: Vec<String>,
+}
+
+async fn h_add_peers(
+    State(e): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<PeersBody>,
+) -> ApiResult<impl IntoResponse> {
+    Ok(Json(json!({ "added": e.add_peers(&id, &b.peers)? })))
+}
+
 fn stream_path(e: &Engine, id: &str, file: usize, name: &str) -> String {
     let name: String =
         url::form_urlencoded::byte_serialize(name.rsplit('/').next().unwrap_or(name).as_bytes())
@@ -456,7 +469,7 @@ pub fn router(engine: Arc<Engine>, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/torrents/pause-all", post(h_pause_all))
         .route("/api/torrents/resume-all", post(h_resume_all))
         .route("/api/torrents/{id}", get(h_details).delete(h_remove))
-        .route("/api/torrents/{id}/peers", get(h_peers))
+        .route("/api/torrents/{id}/peers", get(h_peers).post(h_add_peers))
         .route("/api/torrents/{id}/pieces", get(h_pieces))
         .route("/api/torrents/{id}/pause", post(h_pause))
         .route("/api/torrents/{id}/resume", post(h_resume))

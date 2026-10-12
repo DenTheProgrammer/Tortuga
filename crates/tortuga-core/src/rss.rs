@@ -413,7 +413,10 @@ pub(crate) fn spawn(engine: Arc<Engine>) {
         tokio::time::sleep(Duration::from_secs(10)).await;
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
-            interval.tick().await;
+            tokio::select! {
+                _ = engine.cancel.cancelled() => break,
+                _ = interval.tick() => {}
+            }
             let now = now_ts();
             let due: Vec<String> = store(&engine)
                 .snapshot()

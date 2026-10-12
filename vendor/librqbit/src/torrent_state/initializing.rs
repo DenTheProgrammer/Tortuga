@@ -88,7 +88,7 @@ impl TorrentStateInitializing {
         bitv_factory: &dyn BitVFactory,
         have_pieces: Option<Box<dyn BitV>>,
     ) -> Option<Box<dyn BitV>> {
-        let hp = have_pieces?;
+        let mut hp = have_pieces?;
         let actual = hp.as_bytes().len();
         let expected = self.metadata.lengths().piece_bitfield_bytes();
         if actual != expected {
@@ -98,6 +98,23 @@ impl TorrentStateInitializing {
                 "the bitfield loaded isn't of correct length, ignoring it, will do full check"
             );
             return None;
+        }
+
+        // Tortuga patch: files deleted or truncated while we were not running
+        // would otherwise fail the sampled check below and force a full recheck
+        // of the whole torrent. Drop just the pieces whose data is past the end
+        // of the file on disk, and remember those files for the client.
+        let missing = self.drop_pieces_missing_on_disk(&mut *hp);
+        if !missing.is_empty() {
+            warn!(
+                info_hash = ?self.shared.info_hash,
+                files = ?missing,
+                "files missing or truncated on disk, their pieces will be re-requested"
+            );
+            if let Err(e) = hp.flush(true) {
+                warn!("error flushing bitfield: {e:#}");
+            }
+            *self.shared.missing_files.lock() = missing;
         }
 
         let is_broken = self
@@ -184,6 +201,46 @@ impl TorrentStateInitializing {
         }
 
         Some(hp)
+    }
+
+    fn drop_pieces_missing_on_disk(&self, hp: &mut dyn crate::bitv::BitV) -> Vec<usize> {
+        let lengths = self.metadata.lengths();
+        let output_folder = &self.shared.options.output_folder;
+        let mut missing = Vec::new();
+        for (file_id, fi) in self.metadata.file_infos.iter().enumerate() {
+            if fi.attrs.padding || fi.len == 0 {
+                continue;
+            }
+            let on_disk = std::fs::metadata(output_folder.join(&fi.relative_filename))
+                .map(|m| m.len())
+                .unwrap_or(0);
+            if on_disk >= fi.len {
+                continue;
+            }
+            let mut dropped = false;
+            for piece in fi.piece_range_usize() {
+                if !hp.as_slice().get(piece).is_some_and(|b| *b) {
+                    continue;
+                }
+                let Some(vpi) = u32::try_from(piece)
+                    .ok()
+                    .and_then(|p| lengths.validate_piece_index(p))
+                else {
+                    continue;
+                };
+                // End of this piece's data inside the file, relative to the file start.
+                let piece_end = lengths.piece_offset(vpi) + lengths.piece_length(vpi) as u64;
+                let end_in_file = piece_end.min(fi.offset_in_torrent + fi.len) - fi.offset_in_torrent;
+                if end_in_file > on_disk {
+                    hp.as_slice_mut().set(piece, false);
+                    dropped = true;
+                }
+            }
+            if dropped {
+                missing.push(file_id);
+            }
+        }
+        missing
     }
 
     pub async fn check(&self) -> anyhow::Result<TorrentStatePaused> {
