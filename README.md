@@ -23,6 +23,16 @@ A lightweight desktop torrent client for Windows, built with Tauri and Rust
   - English and Russian (follows the system language).
 - **Automatic updates** from GitHub Releases.
 
+<p align="center">
+  <img src="docs/screenshots/dark.png" alt="Tortuga, dark theme: torrents downloading, a series downloading episodes in order" width="900">
+</p>
+
+<details>
+<summary>Light theme</summary>
+
+<p align="center"><img src="docs/screenshots/light.png" alt="Tortuga, light theme" width="900"></p>
+</details>
+
 ## Install
 
 Download `Tortuga_x.y.z_x64-setup.exe` from [Releases](../../releases/latest) and run it. No admin
