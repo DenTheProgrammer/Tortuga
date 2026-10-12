@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileUp, FolderOpen } from "lucide-react";
+import { ChevronDown, FileUp, FolderOpen } from "lucide-react";
 import { AddRequest, api, FilePriority, ResolveResponse, Settings } from "../api";
 import { useT } from "../i18n";
 import * as fmt from "../format";
-import { isTauri, pickFolder, pickTorrentFile } from "../native";
+import { isTauri, localStorageGet, localStorageSet, pickFolder, pickTorrentFile } from "../native";
 import { Check, Dialog, Field, useToast } from "./ui";
 
 const VIDEO = /\.(mp4|m4v|mkv|webm|mov|avi|ts|m2ts|mpg|mpeg|wmv|flv)$/i;
@@ -14,6 +14,66 @@ function looksLikeSeries(files: { path: string; length: number }[]) {
   const total = files.reduce((s, f) => s + f.length, 0);
   const vbytes = videos.reduce((s, f) => s + f.length, 0);
   return videos.length >= 2 && vbytes * 10 >= total * 7;
+}
+
+const RECENT_KEY = "tortuga.recentFolders";
+const RECENT_MAX = 8;
+
+function recentFolders(): string[] {
+  try {
+    const v = JSON.parse(localStorageGet(RECENT_KEY) ?? "[]");
+    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberFolder(dir: string) {
+  const d = dir.trim();
+  if (!d) return;
+  const next = [d, ...recentFolders().filter((x) => x !== d)].slice(0, RECENT_MAX);
+  localStorageSet(RECENT_KEY, JSON.stringify(next));
+}
+
+/** Save folder: free text, a folder picker, and the last used folders. */
+function FolderField({ value, defaultDir, onChange }: { value: string; defaultDir: string; onChange: (v: string) => void }) {
+  const { t } = useT();
+  const [open, setOpen] = useState(false);
+  const options = useMemo(() => [...new Set([defaultDir, ...recentFolders()])].filter(Boolean), [defaultDir]);
+  return (
+    <div className="folder-field">
+      <div className="row-flex">
+        <input className="input" value={value} onChange={(e) => onChange(e.target.value)} />
+        {options.length > 1 && (
+          <button className="icon-btn" title={t("recentFolders")} onClick={() => setOpen((o) => !o)}>
+            <ChevronDown />
+          </button>
+        )}
+        {isTauri && (
+          <button className="icon-btn" title={t("browse")} onClick={async () => onChange((await pickFolder(value)) ?? value)}>
+            <FolderOpen />
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="folder-menu" onMouseLeave={() => setOpen(false)}>
+          {options.map((o) => (
+            <button
+              key={o}
+              className={o === value ? "active" : ""}
+              title={o}
+              onClick={() => {
+                onChange(o);
+                setOpen(false);
+              }}
+            >
+              {o}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export interface AddSource {
@@ -82,16 +142,18 @@ export function AddDialog({
     setSrc({ source: f.path, torrent_base64: f.base64, label: f.name });
   };
 
-  const add = async (withSelection: boolean) => {
-    if (!src) return;
+  // One button: with the file list loaded it adds the chosen files, before
+  // that it adds the whole torrent right away (files can be skipped later).
+  const add = async () => {
+    const s = src ?? (text.trim() ? { source: text.trim() } : null);
+    if (!s) return;
     setBusy(true);
     try {
-      const priorities: FilePriority[] | undefined =
-        withSelection && resolved
-          ? resolved.files.map((f) => (wanted.has(f.index) ? "normal" : "skip"))
-          : undefined;
+      const priorities: FilePriority[] | undefined = resolved
+        ? resolved.files.map((f) => (wanted.has(f.index) ? "normal" : "skip"))
+        : undefined;
       const r = await api.add({
-        ...request(src),
+        ...request(s),
         save_path: savePath !== settings.download_dir ? savePath : undefined,
         paused: !start,
         // Before the file list is known, let the backend detect series itself.
@@ -99,6 +161,7 @@ export function AddDialog({
         category: category || undefined,
         priorities,
       });
+      rememberFolder(savePath);
       toast(r.already_added ? t("alreadyAdded") : t("added_ok"));
       onAdded(r.id);
       onClose();
@@ -123,18 +186,13 @@ export function AddDialog({
       wide={!!resolved}
       footer={
         <>
-          {resolving && (
-            <button className="btn" onClick={() => add(false)} disabled={busy} style={{ marginRight: "auto" }}>
-              {t("addNow")}
-            </button>
-          )}
           <button className="btn" onClick={onClose}>
             {t("cancel")}
           </button>
           <button
             className="btn primary"
-            disabled={busy || !resolved || resolved.already_added || wanted.size === 0}
-            onClick={() => add(true)}
+            disabled={busy || (!src && !text.trim()) || (!!resolved && (resolved.already_added || wanted.size === 0))}
+            onClick={add}
           >
             {t("add")}
           </button>
@@ -226,36 +284,30 @@ export function AddDialog({
               </div>
             </div>
           )}
-          <div className="grid2">
-            <Field label={t("savePath")}>
-              <div className="row-flex">
-                <input className="input" value={savePath} onChange={(e) => setSavePath(e.target.value)} />
-                {isTauri && (
-                  <button className="icon-btn" title={t("browse")} onClick={async () => setSavePath((await pickFolder(savePath)) ?? savePath)}>
-                    <FolderOpen />
-                  </button>
-                )}
-              </div>
-            </Field>
-            <Field label={t("category")}>
-              <input className="input" list="categories" value={category} onChange={(e) => setCategory(e.target.value)} />
-              <datalist id="categories">
-                {categories.map((c) => (
-                  <option key={c} value={c} />
-                ))}
-              </datalist>
-            </Field>
-          </div>
-          <div className="row-flex" style={{ gap: 20 }}>
-            <Check checked={start} onChange={setStart}>
-              {t("startImmediately")}
-            </Check>
-            <Check checked={sequential} onChange={setSequential}>
-              <span title={t("sequentialHint")}>{t("sequential")}</span>
-            </Check>
-          </div>
         </>
       )}
+
+      <div className="grid2">
+        <Field label={t("savePath")}>
+          <FolderField value={savePath} defaultDir={settings.download_dir} onChange={setSavePath} />
+        </Field>
+        <Field label={t("category")}>
+          <input className="input" list="categories" value={category} onChange={(e) => setCategory(e.target.value)} />
+          <datalist id="categories">
+            {categories.map((c) => (
+              <option key={c} value={c} />
+            ))}
+          </datalist>
+        </Field>
+      </div>
+      <div className="row-flex" style={{ gap: 20 }}>
+        <Check checked={start} onChange={setStart}>
+          {t("startImmediately")}
+        </Check>
+        <Check checked={sequential} onChange={setSequential}>
+          <span title={t("sequentialHint")}>{t("sequential")}</span>
+        </Check>
+      </div>
     </Dialog>
   );
 }

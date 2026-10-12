@@ -386,6 +386,39 @@ table.grid {
   color: var(--text);
 }
 
+/* Drag handle on the right edge of each header cell. */
+.grid th .col-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 7px;
+  height: 100%;
+  cursor: col-resize;
+}
+
+.grid th .col-resize::after {
+  content: "";
+  position: absolute;
+  top: 25%;
+  right: 3px;
+  height: 50%;
+  border-right: 1px solid var(--line);
+}
+
+.grid th .col-resize:hover::after {
+  border-color: var(--text-dim);
+}
+
+.grid th.filler {
+  cursor: default;
+}
+
+body.col-resizing,
+body.col-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
 .grid th.num,
 .grid td.num {
   text-align: right;
@@ -1052,4 +1085,51 @@ select.prio {
 
 .banner span {
   flex: 1;
+}
+
+/* Save folder field with the recent folders list (add dialog). It opens
+   inline so the dialog's scrolling content never clips it. */
+.folder-menu {
+  margin-top: 4px;
+  max-height: 200px;
+  overflow: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: var(--shadow);
+  padding: 4px;
+}
+
+.folder-menu button {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.folder-menu button:hover {
+  background: var(--bg-hover);
+}
+
+.folder-menu button.active {
+  color: var(--accent);
+}
+
+/* Long paths must not push neighbouring fields out of the dialog. */
+.grid2 > * {
+  min-width: 0;
+}
+
+.folder-field .row-flex .input {
+  flex: 1;
+  min-width: 0;
 }

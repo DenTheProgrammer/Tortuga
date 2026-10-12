@@ -627,6 +627,11 @@ export default function App() {
                 <div className="details" style={{ height: detailsHeight }}>
                   <Details
                     id={focused && focused.state !== "metadata" && !(focused.state === "error" && !focused.size) ? focused.id : null}
+                    waiting={
+                      focused && (focused.state === "metadata" || (focused.state === "error" && !focused.size))
+                        ? { error: focused.error }
+                        : null
+                    }
                     onPlay={play}
                     onFileContext={fileMenu}
                   />

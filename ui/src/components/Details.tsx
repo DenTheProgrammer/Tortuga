@@ -41,10 +41,13 @@ function usePoll<T>(fn: (() => Promise<T>) | null, ms: number, deps: unknown[]) 
 
 export function Details({
   id,
+  waiting,
   onPlay,
   onFileContext,
 }: {
   id: string | null;
+  /** Selected torrent that has no metadata yet (its error, if the lookup failed). */
+  waiting?: { error: string | null } | null;
   onPlay: (torrentId: string, file: FileEntry) => void;
   onFileContext: (torrentId: string, files: FileEntry[], e: MouseEvent) => void;
 }) {
@@ -76,6 +79,8 @@ export function Details({
       <div className="tab-body">
         {tab === "speed" ? (
           <SpeedGraph />
+        ) : !id && waiting ? (
+          <div className="placeholder">{waiting.error ?? t("metadataWait")}</div>
         ) : !id ? (
           <div className="placeholder">{t("noSelection")}</div>
         ) : !details.data ? (
