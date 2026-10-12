@@ -555,12 +555,14 @@ impl Engine {
             .iter()
             .map(|(key, p)| (key.clone(), p.req.clone(), p.added_at))
             .collect();
-        for (key, req, added_at) in pending {
-            if self.pending.lock().contains_key(&key) {
-                self.spawn_pending(key, req, added_at);
+        if !pending.is_empty() {
+            for (key, req, added_at) in pending {
+                if self.pending.lock().contains_key(&key) {
+                    self.spawn_pending(key, req, added_at);
+                }
             }
+            self.save_pending();
         }
-        self.save_pending();
         Ok(())
     }
 
