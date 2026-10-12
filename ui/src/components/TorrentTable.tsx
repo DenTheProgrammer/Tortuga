@@ -1,4 +1,4 @@
-import { MouseEvent, useState } from "react";
+import { MouseEvent, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp } from "lucide-react";
 import type { TorrentState, TorrentSummary } from "../api";
 import { useT } from "../i18n";
@@ -20,19 +20,37 @@ export const stateColor: Record<TorrentState, string> = {
   error: "var(--red)",
 };
 
-const columns: { key: SortKey; label: Parameters<ReturnType<typeof useT>["t"]>[0]; width: number; num?: boolean }[] = [
-  { key: "name", label: "name", width: 380 },
-  { key: "size", label: "size", width: 90, num: true },
-  { key: "progress", label: "progress", width: 140 },
-  { key: "state", label: "status", width: 190 },
-  { key: "down_speed", label: "down", width: 100, num: true },
-  { key: "up_speed", label: "up", width: 100, num: true },
-  { key: "eta", label: "eta", width: 90, num: true },
-  { key: "peers", label: "peers", width: 70, num: true },
+const columns: { key: SortKey; label: Parameters<ReturnType<typeof useT>["t"]>[0]; width: number; min: number; num?: boolean }[] = [
+  { key: "name", label: "name", width: 380, min: 120 },
+  { key: "size", label: "size", width: 90, min: 65, num: true },
+  { key: "progress", label: "progress", width: 140, min: 80 },
+  { key: "state", label: "status", width: 190, min: 140 },
+  { key: "down_speed", label: "down", width: 100, min: 74, num: true },
+  { key: "up_speed", label: "up", width: 100, min: 70, num: true },
+  { key: "eta", label: "eta", width: 90, min: 70, num: true },
+  { key: "peers", label: "peers", width: 70, min: 50, num: true },
 ];
 
 const WIDTHS_KEY = "tortuga.columnWidths";
-const MIN_WIDTH = 40;
+const MIN_TABLE_WIDTH = columns.reduce((sum, c) => sum + c.min, 0);
+
+/** Give spare space to the name; shrink it first, then the other columns. */
+function fitWidths(preferred: number[], available: number) {
+  const widths = [...preferred];
+  let excess = widths.reduce((sum, w) => sum + w, 0) - Math.max(available, MIN_TABLE_WIDTH);
+  const fromName = Math.min(Math.max(excess, 0), widths[0] - columns[0].min);
+  widths[0] -= fromName;
+  excess -= fromName;
+  if (excess > 0) {
+    const slack = widths.slice(1).reduce((sum, w, i) => sum + w - columns[i + 1].min, 0);
+    for (let i = 1; i < widths.length; i++) {
+      widths[i] -= excess * (widths[i] - columns[i].min) / slack;
+    }
+  } else {
+    widths[0] -= excess;
+  }
+  return widths;
+}
 
 function loadWidths(): Record<string, number> {
   try {
@@ -49,7 +67,10 @@ function useColumnWidths() {
     setCustom(next);
     localStorageSet(WIDTHS_KEY, JSON.stringify(next));
   };
-  const width = (key: string) => custom[key] ?? columns.find((c) => c.key === key)!.width;
+  const width = (key: string) => {
+    const col = columns.find((c) => c.key === key)!;
+    return Math.max(col.min, Number.isFinite(custom[key]) ? custom[key] : col.width);
+  };
   const startResize = (key: string, e: MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -59,7 +80,7 @@ function useColumnWidths() {
     const start = th?.offsetWidth ?? width(key);
     let latest = custom;
     const move = (ev: globalThis.MouseEvent) => {
-      latest = { ...latest, [key]: Math.max(MIN_WIDTH, Math.round(start + ev.clientX - startX)) };
+      latest = { ...latest, [key]: Math.max(columns.find((c) => c.key === key)!.min, Math.round(start + ev.clientX - startX)) };
       setCustom(latest);
     };
     const up = () => {
@@ -102,22 +123,30 @@ export function TorrentTable({
 }) {
   const { t, lang } = useT();
   const cols = useColumnWidths();
-  const total = columns.reduce((sum, c) => sum + cols.width(c.key), 0);
+  const wrap = useRef<HTMLDivElement>(null);
+  const [available, setAvailable] = useState(0);
+  useLayoutEffect(() => {
+    const element = wrap.current!;
+    const measure = () => setAvailable(element.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const widths = fitWidths(columns.map((c) => cols.width(c.key)), available);
 
   return (
-    <div className="table-wrap" onMouseDown={(e) => e.target === e.currentTarget && onBackgroundClick()}>
-      <table className="grid" style={{ width: `max(${total}px, 100%)` }}>
+    <div ref={wrap} className="table-wrap" onMouseDown={(e) => e.target === e.currentTarget && onBackgroundClick()}>
+      <table className="grid" style={{ minWidth: MIN_TABLE_WIDTH }}>
         <colgroup>
-          {/* The name column has no fixed width: it takes the spare width when the
-              columns are narrower than the window (and its own width otherwise). */}
-          {columns.map((c) => (
-            <col key={c.key} style={c.key === "name" ? undefined : { width: cols.width(c.key) }} />
+          {columns.map((c, i) => (
+            <col key={c.key} style={{ width: widths[i] }} />
           ))}
         </colgroup>
         <thead>
           <tr>
             {columns.map((c) => (
-              <th key={c.key} className={c.num ? "num" : ""} onClick={() => onSort(c.key)}>
+              <th key={c.key} title={t(c.label)} className={c.num ? "num" : ""} onClick={() => onSort(c.key)}>
                 {t(c.label)}
                 {sort.key === c.key &&
                   (sort.desc ? <ArrowDown size={11} style={{ marginLeft: 4 }} /> : <ArrowUp size={11} style={{ marginLeft: 4 }} />)}
@@ -153,9 +182,9 @@ export function TorrentTable({
                 </div>
               </td>
               <td>
-                <span className="state">
+                <span className="state" title={t(`st_${tr.state}` as never)}>
                   <span className="dot" style={{ background: stateColor[tr.state] }} />
-                  {t(`st_${tr.state}` as never)}
+                  <span className="state-label">{t(`st_${tr.state}` as never)}</span>
                 </span>
               </td>
               <td className="num">{fmt.speed(tr.down_speed, lang)}</td>

@@ -10,19 +10,25 @@ import {
   pickExecutable,
   pickFolder,
   PlayerInfo,
+  appVersion,
+  checkUpdate,
+  installUpdate,
+  UpdateInfo,
 } from "../native";
 import { Check, Dialog, Field, useToast } from "./ui";
 
-type Section = "sGeneral" | "sDownloads" | "sSpeed" | "sNetwork" | "sPlayer";
+type Section = "sGeneral" | "sDownloads" | "sSpeed" | "sNetwork" | "sPlayer" | "sVersion";
 
 export function SettingsDialog({
   settings,
   onClose,
   onSaved,
+  onUpdate,
 }: {
   settings: Settings;
   onClose: () => void;
   onSaved: (s: Settings) => void;
+  onUpdate: (u: UpdateInfo | null) => void;
 }) {
   const { t } = useT();
   const toast = useToast();
@@ -45,7 +51,7 @@ export function SettingsDialog({
     }
   };
 
-  const sections: Section[] = ["sGeneral", "sDownloads", "sSpeed", "sNetwork", "sPlayer"];
+  const sections: Section[] = ["sGeneral", "sDownloads", "sSpeed", "sNetwork", "sPlayer", "sVersion"];
 
   return (
     <Dialog
@@ -57,9 +63,9 @@ export function SettingsDialog({
           <button className="btn" onClick={onClose}>
             {t("cancel")}
           </button>
-          <button className="btn primary" onClick={save} disabled={saving}>
+          {section !== "sVersion" && <button className="btn primary" onClick={save} disabled={saving}>
             {t("save")}
-          </button>
+          </button>}
         </>
       }
     >
@@ -77,9 +83,58 @@ export function SettingsDialog({
           {section === "sSpeed" && <Speed s={s} set={set} />}
           {section === "sNetwork" && <Network s={s} set={set} />}
           {section === "sPlayer" && <Player s={s} set={set} />}
+          {section === "sVersion" && <Version onUpdate={onUpdate} />}
         </div>
       </div>
     </Dialog>
+  );
+}
+
+function Version({ onUpdate }: { onUpdate: (u: UpdateInfo | null) => void }) {
+  const { t } = useT();
+  const [version, setVersion] = useState<string | null>(null);
+  const [status, setStatus] = useState<"idle" | "checking" | "current" | "updating">("idle");
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    appVersion().then((v) => active && setVersion(v)).catch((e) => active && setError(String(e)));
+    return () => { active = false; };
+  }, []);
+  const check = async () => {
+    setStatus("checking");
+    setError(null);
+    try {
+      const found = await checkUpdate();
+      setUpdate(found);
+      setStatus(found ? "idle" : "current");
+      onUpdate(found);
+    } catch (e) {
+      setError(String(e));
+      setStatus("idle");
+    }
+  };
+  return (
+    <>
+      <Field label={t("installedVersion")}><strong>Tortuga {version ?? "…"}</strong></Field>
+      <div>
+        <button className="btn" onClick={check} disabled={!isTauri || status === "checking" || status === "updating"}>
+          {status === "checking" ? t("checkingUpdates") : t("checkUpdates")}
+        </button>
+      </div>
+      <div className="hint">{t(isTauri ? "autoUpdateHint" : "updatesDesktopOnly")}</div>
+      {status === "current" && <div role="status" className="note">{t("upToDate")}</div>}
+      {update && <div className="note">
+        {t("updateAvailable")} <b>{update.version}</b>
+        <div style={{ marginTop: 12 }}><button className="btn primary" disabled={status === "updating"} onClick={async () => {
+          setStatus("updating");
+          setError(null);
+          try { await installUpdate(); }
+          catch (e) { setError(String(e)); setStatus("idle"); }
+        }}>{status === "updating" ? t("updating") : t("updateNow")}</button></div>
+      </div>}
+      {error && <div role="alert" className="note" style={{ color: "var(--red)" }}>{t("updateCheckError")} {error}</div>}
+    </>
   );
 }
 

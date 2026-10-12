@@ -2,6 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -177,9 +178,23 @@ export interface UpdateInfo {
 /** Calls `cb` with an available update (now or when one is found later). */
 export async function onUpdateAvailable(cb: (u: UpdateInfo) => void) {
   if (!isTauri) return () => {};
-  const now = await invoke<UpdateInfo | null>("pending_update");
-  if (now) cb(now);
-  return listen<UpdateInfo>("update-available", (e) => cb(e.payload));
+  const unlisten = await listen<UpdateInfo>("update-available", (e) => cb(e.payload));
+  try {
+    const now = await invoke<UpdateInfo | null>("pending_update");
+    if (now) cb(now);
+    return unlisten;
+  } catch (e) {
+    unlisten();
+    throw e;
+  }
+}
+
+export async function appVersion(): Promise<string> {
+  return isTauri ? getVersion() : __APP_VERSION__;
+}
+
+export async function checkUpdate(): Promise<UpdateInfo | null> {
+  return isTauri ? invoke("check_update") : null;
 }
 
 export async function installUpdate() {

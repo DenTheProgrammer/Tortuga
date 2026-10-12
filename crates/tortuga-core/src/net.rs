@@ -33,6 +33,7 @@ pub struct NetInterface {
     pub ipv4: Vec<Ipv4Addr>,
     pub is_vpn: bool,
     pub is_default_route: bool,
+    pub has_gateway: bool,
     pub kind: &'static str,
 }
 
@@ -114,6 +115,7 @@ pub fn list_interfaces() -> Vec<NetInterface> {
                 ipv4,
                 is_vpn,
                 is_default_route,
+                has_gateway: i.gateway.is_some(),
                 kind,
             }
         })
@@ -164,7 +166,12 @@ fn pick_physical(ifaces: &[NetInterface]) -> Option<NetInterface> {
                 "cellular" => 1,
                 _ => 0,
             };
-            (i.is_default_route, kind, i.ipv4.iter().any(is_private_v4))
+            (
+                i.is_default_route,
+                i.has_gateway,
+                kind,
+                i.ipv4.iter().any(is_private_v4),
+            )
         })
         .cloned()
 }
@@ -231,6 +238,7 @@ mod tests {
             ipv4: vec![Ipv4Addr::from(ip)],
             is_vpn: vpn,
             is_default_route: default,
+            has_gateway: true,
             kind,
         }
     }
@@ -269,5 +277,14 @@ mod tests {
             iface("eth0", "ethernet", false, false, [192, 168, 1, 6]),
         ];
         assert_eq!(pick_physical(&list).unwrap().bind_name, "eth0");
+    }
+
+    #[test]
+    fn prefers_wifi_with_gateway_over_wsl_ethernet_without_one() {
+        let wifi = iface("Wi-Fi", "wifi", false, false, [192, 168, 1, 98]);
+        let mut wsl = iface("vEthernet (WSL)", "ethernet", false, false, [172, 22, 64, 1]);
+        wsl.has_gateway = false;
+        let vpn = iface("tun2", "tunnel", true, true, [10, 33, 0, 2]);
+        assert_eq!(pick_physical(&[wifi, wsl, vpn]).unwrap().bind_name, "Wi-Fi");
     }
 }

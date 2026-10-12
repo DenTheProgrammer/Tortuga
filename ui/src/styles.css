@@ -499,6 +499,16 @@ body.col-resizing * {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  max-width: 100%;
+}
+
+.state-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.state .dot {
+  flex-shrink: 0;
 }
 
 .dot {

@@ -694,7 +694,7 @@ export default function App() {
           onAdded={(id) => setSelected(new Set([id]))}
         />
       )}
-      {showSettings && <SettingsDialog settings={settings} onClose={() => setShowSettings(false)} onSaved={setSettings} />}
+      {showSettings && <SettingsDialog settings={settings} onClose={() => setShowSettings(false)} onSaved={setSettings} onUpdate={setUpdate} />}
       {showCreate && <CreateDialog onClose={() => setShowCreate(false)} />}
       {player && (
         <PlayerDialog
