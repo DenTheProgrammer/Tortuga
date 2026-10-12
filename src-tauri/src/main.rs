@@ -123,6 +123,13 @@ fn make_default_handler() -> Result<(), String> {
     assoc::make_default().map_err(|e| e.to_string())
 }
 
+/// The same exit path as the tray and window-close event, available to desktop
+/// integrations without giving the webview arbitrary process-control access.
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    quit(&app);
+}
+
 // ---------------------------------------------------------------------------
 // Tray & notifications
 // ---------------------------------------------------------------------------
@@ -414,6 +421,7 @@ fn main() {
             open_in_player,
             default_handler_status,
             make_default_handler,
+            quit_app,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
