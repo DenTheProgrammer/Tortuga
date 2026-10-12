@@ -528,6 +528,9 @@ impl Engine {
 
     pub(crate) async fn start_session(self: &Arc<Self>, binding: Binding) -> anyhow::Result<()> {
         let _g = self.restart_lock.lock().await;
+        if self.cancel.is_cancelled() {
+            bail!("engine is shutting down");
+        }
         // Metadata lookups own the old session too. Stop them before switching
         // routes; otherwise magnets keep waiting on the discarded DHT/trackers.
         for p in self.pending.lock().values_mut() {
@@ -1723,7 +1726,17 @@ impl Engine {
     /// Stop background work and the BitTorrent session, saving state.
     pub async fn shutdown(&self) {
         self.cancel.cancel();
-        let _ = self.meta.save();
+        // A route change must not create a replacement session after shutdown.
+        let _g = self.restart_lock.lock().await;
+        self.save_pending();
+        for pending in self.pending.lock().values_mut() {
+            if let Some(task) = pending.task.take() {
+                task.abort();
+            }
+        }
+        if let Err(e) = self.flush_transfer_stats() {
+            warn!("can't save transfer statistics on shutdown: {e:#}");
+        }
         let session = self.session.write().take();
         if let Some(s) = session {
             s.stop().await;

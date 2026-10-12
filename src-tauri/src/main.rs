@@ -3,6 +3,7 @@
 
 mod assoc;
 mod players;
+mod shutdown;
 mod updates;
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
@@ -29,7 +30,7 @@ struct AppState {
     /// Sources (magnets / .torrent paths) received before the UI subscribed.
     pending: Mutex<Vec<String>>,
     ui_ready: Mutex<bool>,
-    quitting: Mutex<bool>,
+    shutdown: shutdown::Shutdown,
 }
 
 fn is_source(arg: &str) -> bool {
@@ -57,6 +58,12 @@ fn deliver_sources(app: &AppHandle, sources: Vec<String>) {
 }
 
 fn show_main(app: &AppHandle) {
+    if app
+        .try_state::<AppState>()
+        .is_some_and(|s| s.shutdown.is_requested())
+    {
+        return;
+    }
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
         let _ = w.show();
@@ -186,6 +193,9 @@ fn setup_tray(app: &AppHandle, engine: Arc<Engine>) -> tauri::Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| {
+            if app.state::<AppState>().shutdown.is_requested() {
+                return;
+            }
             let e = e.clone();
             match event.id.as_ref() {
                 "show" => show_main(app),
@@ -222,9 +232,13 @@ fn setup_tray(app: &AppHandle, engine: Arc<Engine>) -> tauri::Result<()> {
 
     // Keep tooltip and the turtle checkbox in sync.
     let e = engine.clone();
+    let app = app.clone();
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(2)).await;
+            if app.state::<AppState>().shutdown.is_requested() {
+                break;
+            }
             let st = e.state();
             let active = st
                 .torrents
@@ -302,18 +316,44 @@ fn spawn_notifications(app: AppHandle, engine: Arc<Engine>) {
 
 // ---------------------------------------------------------------------------
 
-/// Give the engine a moment to flush resume state.
+/// Bounded cleanup also used before launching the update installer.
 async fn stop_engine(app: &AppHandle) {
     let engine = app.state::<AppState>().engine.clone();
-    let _ = engine.flush_transfer_stats();
-    if let Ok(s) = engine.session() {
-        let _ = tokio::time::timeout(Duration::from_secs(3), s.stop()).await;
+    if !shutdown::stop_within(
+        move || tauri::async_runtime::block_on(engine.shutdown()),
+        shutdown::GRACE_PERIOD,
+    )
+    .await
+    {
+        tracing::warn!("engine shutdown exceeded its grace period or failed");
     }
 }
 
 fn quit(app: &AppHandle) {
-    *app.state::<AppState>().quitting.lock() = true;
-    app.exit(0);
+    if !app.state::<AppState>().shutdown.begin() {
+        return;
+    }
+    // Arm this before any engine or window work. Even a stuck native teardown
+    // cannot keep this process alive indefinitely.
+    shutdown::arm_watchdog(shutdown::HARD_DEADLINE);
+    let ui = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        for window in ui.webview_windows().values() {
+            let _ = window.hide();
+        }
+        if let Some(tray) = ui.tray_by_id("main") {
+            let _ = tray.set_visible(false);
+        }
+    });
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let started = std::time::Instant::now();
+        tracing::info!("shutdown requested");
+        stop_engine(&app).await;
+        tracing::info!(elapsed_ms = started.elapsed().as_millis(), "shutdown cleanup finished");
+        app.state::<AppState>().shutdown.finish();
+        app.exit(0);
+    });
 }
 
 fn main() {
@@ -409,7 +449,7 @@ fn main() {
                 engine: engine.clone(),
                 pending: Mutex::new(initial_sources),
                 ui_ready: Mutex::new(false),
-                quitting: Mutex::new(false),
+                shutdown: shutdown::Shutdown::default(),
             });
 
             if !isolated && let Err(e) = assoc::register(true) {
@@ -441,9 +481,14 @@ fn main() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<AppState>();
-                if !*state.quitting.lock() && state.engine.settings().close_to_tray {
-                    api.prevent_close();
+                api.prevent_close();
+                if state.shutdown.is_requested() {
+                    return;
+                }
+                if state.engine.settings().close_to_tray {
                     let _ = window.hide();
+                } else {
+                    quit(window.app_handle());
                 }
             }
         })
@@ -451,8 +496,11 @@ fn main() {
         .expect("error while building Tortuga");
 
     app.run(|app, event| {
-        if let RunEvent::ExitRequested { .. } = event {
-            tauri::async_runtime::block_on(stop_engine(app));
+        if let RunEvent::ExitRequested { api, .. } = event
+            && !app.state::<AppState>().shutdown.is_ready()
+        {
+            api.prevent_exit();
+            quit(app);
         }
     });
 }
