@@ -124,6 +124,14 @@ impl MaybeDualstackSocket<Socket> {
         )
         .map_err(Error::SocketNew)?;
 
+        // Windows reports ICMP "port unreachable" from a previous datagram as
+        // WSAECONNRESET on the next UDP receive. A single stale DHT node must
+        // not terminate the shared receive loop (and therefore all of DHT).
+        #[cfg(windows)]
+        if is_udp {
+            disable_udp_connreset(&socket).map_err(Error::UdpConnReset)?;
+        }
+
         let mut set_dualstack = false;
 
         let addr_kind = match (opts.request_dualstack, addr) {
@@ -381,6 +389,39 @@ impl MaybeDualstackSocket<tokio::net::UdpSocket> {
     ) -> Poll<std::io::Result<usize>> {
         let target = self.convert_addr_for_send(target);
         self.socket.poll_send_to(cx, buf, target)
+    }
+}
+
+#[cfg(windows)]
+fn disable_udp_connreset(socket: &Socket) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Networking::WinSock::{
+        SIO_UDP_CONNRESET, SOCKET, SOCKET_ERROR, WSAGetLastError, WSAIoctl,
+    };
+
+    let enabled: u32 = 0;
+    let mut returned = 0;
+    // The input BOOL lives for this synchronous call; no output or overlapped
+    // operation is requested. The socket remains owned by the caller.
+    let result = unsafe {
+        WSAIoctl(
+            socket.as_raw_socket() as SOCKET,
+            SIO_UDP_CONNRESET,
+            (&enabled as *const u32).cast(),
+            std::mem::size_of_val(&enabled) as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut returned,
+            std::ptr::null_mut(),
+            None,
+        )
+    };
+    if result == SOCKET_ERROR {
+        Err(std::io::Error::from_raw_os_error(unsafe {
+            WSAGetLastError()
+        }))
+    } else {
+        Ok(())
     }
 }
 

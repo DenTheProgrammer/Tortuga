@@ -4,6 +4,8 @@ pub enum Error {
     SocketFromFd(std::io::Error),
     #[error("error creating socket: {0}")]
     SocketNew(std::io::Error),
+    #[error("error disabling UDP connection reset reporting: {0}")]
+    UdpConnReset(std::io::Error),
     #[error("error binding: {0}")]
     Bind(std::io::Error),
     #[error("error setting only_v6={value}: {source}")]
