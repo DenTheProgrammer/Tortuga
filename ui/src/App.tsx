@@ -32,7 +32,7 @@ import {
   Layers,
 } from "lucide-react";
 import { api, configure, FileEntry, Settings, StateResponse, TorrentSummary } from "./api";
-import { I18nContext, Key, makeT } from "./i18n";
+import { I18nContext, Key, makeT, systemLang } from "./i18n";
 import * as fmt from "./format";
 import {
   backendInfo,
@@ -106,7 +106,7 @@ export default function App() {
   const [detailsHeight, setDetailsHeight] = useState(() => Number(localStorageGet("tortuga.details")) || 300);
   const toast = useToast();
 
-  const lang = settings?.language ?? "ru";
+  const lang = settings?.language ?? systemLang();
   const t = useMemo(() => makeT(lang), [lang]);
   const i18n = useMemo(() => ({ t, lang }), [t, lang]);
   const err = useCallback((e: unknown) => toast(String((e as Error)?.message ?? e), true), [toast]);
@@ -766,7 +766,7 @@ function CategoryDialog({
   onClose: () => void;
   onSave: (c: string) => void;
 }) {
-  const t = useRef(makeT(document.documentElement.lang || "ru")).current;
+  const t = useRef(makeT(document.documentElement.lang || systemLang())).current;
   const [value, setValue] = useState(initial);
   return (
     <Dialog

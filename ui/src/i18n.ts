@@ -449,7 +449,12 @@ export function useT() {
   return useContext(I18nContext);
 }
 
+/** UI language before settings load: Russian for Russian systems, English otherwise. */
+export function systemLang(): string {
+  return typeof navigator !== "undefined" && navigator.language.toLowerCase().startsWith("ru") ? "ru" : "en";
+}
+
 export function makeT(lang: string): T {
-  const d = dicts[lang] ?? ru;
+  const d = dicts[lang] ?? en;
   return (k) => d[k] ?? k;
 }

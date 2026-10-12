@@ -1,0 +1,46 @@
+name: Release
+
+# Push a tag like v0.2.0 (matching "version" in src-tauri/tauri.conf.json)
+# to build the Windows installers and publish them as a GitHub release.
+# Installed apps pick the new release up automatically.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag matches app version
+        shell: bash
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "v$version" != "${GITHUB_REF_NAME}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match version $version in tauri.conf.json"
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci --prefix ui
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: npx --prefix ui tauri
+          args: --bundles nsis,msi
+          tagName: ${{ github.ref_name }}
+          releaseName: Tortuga ${{ github.ref_name }}
+          releaseBody: See the assets below to download and install Tortuga.
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: false

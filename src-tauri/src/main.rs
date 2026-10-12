@@ -121,7 +121,7 @@ fn make_default_handler() -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 fn tr(lang: &str, ru: &'static str, en: &'static str) -> &'static str {
-    if lang == "en" { en } else { ru }
+    if lang == "ru" { ru } else { en }
 }
 
 fn fmt_speed(bps: u64) -> String {
@@ -204,10 +204,7 @@ fn setup_tray(app: &AppHandle, engine: Arc<Engine>) -> tauri::Result<()> {
                     let _ = e.set_alt_speed(on);
                     let _ = turtle_item.set_checked(on);
                 }
-                "quit" => {
-                    *app.state::<AppState>().quitting.lock() = true;
-                    app.exit(0);
-                }
+                "quit" => crate::quit(app),
                 _ => {}
             }
         })
@@ -305,6 +302,19 @@ fn spawn_notifications(app: AppHandle, engine: Arc<Engine>) {
 
 // ---------------------------------------------------------------------------
 
+/// Give the engine a moment to flush resume state.
+async fn stop_engine(app: &AppHandle) {
+    let engine = app.state::<AppState>().engine.clone();
+    if let Ok(s) = engine.session() {
+        let _ = tokio::time::timeout(Duration::from_secs(3), s.stop()).await;
+    }
+}
+
+fn quit(app: &AppHandle) {
+    *app.state::<AppState>().quitting.lock() = true;
+    app.exit(0);
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -328,7 +338,6 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(updates::UpdateState::default())
         .invoke_handler(tauri::generate_handler![
             updates::pending_update,
@@ -409,13 +418,7 @@ fn main() {
 
     app.run(|app, event| {
         if let RunEvent::ExitRequested { .. } = event {
-            let engine = app.state::<AppState>().engine.clone();
-            // Give the engine a moment to flush state.
-            tauri::async_runtime::block_on(async move {
-                if let Ok(s) = engine.session() {
-                    let _ = tokio::time::timeout(Duration::from_secs(3), s.stop()).await;
-                }
-            });
+            tauri::async_runtime::block_on(stop_engine(app));
         }
     });
 }

@@ -12,6 +12,8 @@ tauri-build = { version = "2", features = [] }
 tortuga-core = { path = "../crates/tortuga-core" }
 anyhow = "1"
 parking_lot = "0.12"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
@@ -20,7 +22,6 @@ tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
-tauri-plugin-updater = "2"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -72,8 +72,7 @@
           "en-US"
         ]
       }
-    },
-    "createUpdaterArtifacts": true
+    }
   },
   "plugins": {
     "deep-link": {
@@ -81,15 +80,6 @@
         "schemes": [
           "magnet"
         ]
-      }
-    },
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERDRTI3MzMwNjAxRjcyMkIKUldRcmNoOWdNSFBpM0ZockNWaExXL3ZCOXdRYmxEWWd6SEZmM3FTYmpmZWFNbEwvWFkyaUtEN2wK",
-      "endpoints": [
-        "https://github.com/DenTheProgrammer/Torrent/releases/latest/download/latest.json"
-      ],
-      "windows": {
-        "installMode": "passive"
       }
     }
   }

@@ -409,6 +409,9 @@ async fn h_stream(
     Path((id, file, name)): Path<(String, usize, String)>,
     headers: HeaderMap,
 ) -> ApiResult<Response> {
+    // A copied link may be opened long after "play": make sure the file is
+    // wanted and the torrent running, or the player would wait forever.
+    e.prepare_stream(&id, file).await?;
     let (mut stream, _) = e.stream(&id, file).await?;
     let len = stream.len();
     let mime = mime_guess::from_path(&name)

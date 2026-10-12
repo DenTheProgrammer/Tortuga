@@ -15,12 +15,14 @@ use tortuga_core::{
 };
 
 fn settings(dir: &Path, download_dir: &Path, upload_limit: u32) {
-    let mut s = Settings::default();
-    s.download_dir = download_dir.to_path_buf();
-    s.dht = false;
-    s.upnp = false;
-    s.lsd = false;
-    s.upload_limit = upload_limit;
+    let mut s = Settings {
+        download_dir: download_dir.to_path_buf(),
+        dht: false,
+        upnp: false,
+        lsd: false,
+        upload_limit,
+        ..Default::default()
+    };
     s.network.mode = NetworkMode::System;
     std::fs::create_dir_all(dir).unwrap();
     s.save(&dir.join("settings.json")).unwrap();

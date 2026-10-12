@@ -106,10 +106,16 @@ pub struct Settings {
     pub scheduler: SchedulerSettings,
 }
 
+/// "ru" for Russian-language systems, English otherwise.
+pub fn system_language() -> String {
+    let ru = sys_locale::get_locale().is_some_and(|l| l.to_ascii_lowercase().starts_with("ru"));
+    if ru { "ru" } else { "en" }.into()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            language: "ru".into(),
+            language: system_language(),
             theme: "dark".into(),
             close_to_tray: true,
             start_minimized: false,

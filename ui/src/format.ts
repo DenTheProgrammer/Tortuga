@@ -1,7 +1,7 @@
 const UNITS_RU = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
 const UNITS_EN = ["B", "KB", "MB", "GB", "TB"];
 
-export function bytes(n: number, lang = "ru"): string {
+export function bytes(n: number, lang = "en"): string {
   const u = lang === "ru" ? UNITS_RU : UNITS_EN;
   if (!Number.isFinite(n) || n <= 0) return `0 ${u[0]}`;
   let i = 0;
@@ -14,12 +14,12 @@ export function bytes(n: number, lang = "ru"): string {
   return `${v.toFixed(digits).replace(".", lang === "ru" ? "," : ".")} ${u[i]}`;
 }
 
-export function speed(n: number, lang = "ru"): string {
+export function speed(n: number, lang = "en"): string {
   if (!n) return "";
   return `${bytes(n, lang)}/${lang === "ru" ? "с" : "s"}`;
 }
 
-export function duration(secs: number | null | undefined, lang = "ru"): string {
+export function duration(secs: number | null | undefined, lang = "en"): string {
   if (secs == null || !Number.isFinite(secs)) return "";
   const ru = lang === "ru";
   if (secs < 60) return ru ? `${Math.max(1, Math.round(secs))} с` : `${Math.max(1, Math.round(secs))}s`;
@@ -36,7 +36,7 @@ export function percent(p: number): string {
   return `${v >= 100 ? 100 : v.toFixed(1)}%`;
 }
 
-export function date(ts: number | null | undefined, lang = "ru"): string {
+export function date(ts: number | null | undefined, lang = "en"): string {
   if (!ts) return "";
   return new Date(ts * 1000).toLocaleString(lang === "ru" ? "ru-RU" : "en-US", {
     day: "2-digit",

@@ -10,11 +10,13 @@ use tortuga_core::{
 };
 
 fn write_settings(dir: &Path, download_dir: &Path) {
-    let mut s = Settings::default();
-    s.download_dir = download_dir.to_path_buf();
-    s.dht = false;
-    s.upnp = false;
-    s.lsd = false;
+    let mut s = Settings {
+        download_dir: download_dir.to_path_buf(),
+        dht: false,
+        upnp: false,
+        lsd: false,
+        ..Default::default()
+    };
     s.network.mode = NetworkMode::System;
     std::fs::create_dir_all(dir).unwrap();
     s.save(&dir.join("settings.json")).unwrap();
@@ -38,10 +40,10 @@ async fn wait_for(
     cond: impl Fn(&tortuga_core::engine::TorrentSummary) -> bool,
 ) {
     for _ in 0..600 {
-        if let Some(t) = engine.state().torrents.into_iter().find(|t| t.id == id) {
-            if cond(&t) {
-                return;
-            }
+        if let Some(t) = engine.state().torrents.into_iter().find(|t| t.id == id)
+            && cond(&t)
+        {
+            return;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
