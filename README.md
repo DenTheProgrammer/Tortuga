@@ -72,7 +72,7 @@ cargo test --workspace
 ## Releases and updates
 
 1. Bump `version` in `src-tauri/tauri.conf.json` and `Cargo.toml`.
-2. Push a matching tag:
+2. Push a matching tag, or run the *Release* workflow from the Actions tab (it tags the commit itself):
 
    ```sh
    git tag v0.2.0 && git push origin v0.2.0

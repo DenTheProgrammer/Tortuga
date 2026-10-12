@@ -1,12 +1,14 @@
 name: Release
 
-# Push a tag like v0.2.0 (matching "version" in src-tauri/tauri.conf.json)
-# to build the Windows installers and publish them as a GitHub release.
+# Builds the Windows installers and publishes them as a GitHub release.
+# Either push a tag like v0.2.0 (matching "version" in src-tauri/tauri.conf.json)
+# or run this workflow by hand: it then tags the current commit with that version.
 # Installed apps pick the new release up automatically.
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -17,6 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check tag matches app version
+        if: github.event_name == 'push'
         shell: bash
         run: |
           version=$(node -p "require('./src-tauri/tauri.conf.json').version")
@@ -38,8 +41,8 @@ jobs:
         with:
           tauriScript: npx --prefix ui tauri
           args: --bundles nsis,msi
-          tagName: ${{ github.ref_name }}
-          releaseName: Tortuga ${{ github.ref_name }}
+          tagName: ${{ github.event_name == 'push' && github.ref_name || 'v__VERSION__' }}
+          releaseName: Tortuga v__VERSION__
           releaseBody: See the assets below to download and install Tortuga.
           releaseDraft: false
           prerelease: false
