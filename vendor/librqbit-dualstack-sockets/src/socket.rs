@@ -85,6 +85,26 @@ impl<S> MaybeDualstackSocket<S> {
 
 impl MaybeDualstackSocket<Socket> {
     fn bind(addr: SocketAddr, opts: BindOpts, is_udp: bool) -> crate::Result<Self> {
+        match Self::bind_inner(addr, opts, is_udp) {
+            // Tortuga patch: hosts with IPv6 disabled can't create [::] sockets;
+            // fall back to the IPv4 wildcard instead of failing.
+            Err(Error::SocketNew(e))
+                if addr.is_ipv6()
+                    && addr.ip().is_unspecified()
+                    && e.raw_os_error() == Some(ipv6_unsupported_errno()) =>
+            {
+                debug!(?addr, "IPv6 unavailable, binding to IPv4 instead");
+                Self::bind_inner(
+                    SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), addr.port()),
+                    opts,
+                    is_udp,
+                )
+            }
+            r => r,
+        }
+    }
+
+    fn bind_inner(addr: SocketAddr, opts: BindOpts, is_udp: bool) -> crate::Result<Self> {
         let socket = Socket::new(
             if addr.is_ipv6() {
                 Domain::IPV6
@@ -362,4 +382,14 @@ impl MaybeDualstackSocket<tokio::net::UdpSocket> {
         let target = self.convert_addr_for_send(target);
         self.socket.poll_send_to(cx, buf, target)
     }
+}
+
+#[cfg(not(windows))]
+fn ipv6_unsupported_errno() -> i32 {
+    libc::EAFNOSUPPORT
+}
+
+#[cfg(windows)]
+fn ipv6_unsupported_errno() -> i32 {
+    windows_sys::Win32::Networking::WinSock::WSAEAFNOSUPPORT
 }
