@@ -194,7 +194,8 @@ fn set_status(engine: &Engine, snap: &NetSnapshot, d: &Decision) -> bool {
     let changed = g.route != status.route
         || g.vpn_active != status.vpn_active
         || g.interface_name != status.interface_name
-        || g.mode != status.mode;
+        || g.mode != status.mode
+        || g.reason != status.reason;
     *g = status;
     changed
 }
@@ -204,6 +205,14 @@ pub(crate) async fn evaluate(engine: &Arc<Engine>) {
         .await
         .unwrap_or_else(|_| net::snapshot());
     let d = decide(engine, &snap);
+    #[cfg(windows)]
+    let d = {
+        let mut d = d;
+        if d.route == Route::Direct && direct_access_denied(&d.binding).await {
+            d.reason = "direct_access_denied";
+        }
+        d
+    };
     let changed = set_status(engine, &snap, &d);
     engine.set_network_blocked(d.route == Route::Blocked);
     if d.route != Route::Blocked
@@ -218,6 +227,53 @@ pub(crate) async fn evaluate(engine: &Arc<Engine>) {
         let status = engine.net_status.read().clone();
         engine.emit(Event::NetworkChanged { status });
     }
+}
+
+// A selected adapter does not mean traffic can leave through it. VPN clients
+// may reject non-tunnel sockets in WFP, before any packet reaches the network.
+// Check from Tortuga's own process and retain the selected direct binding:
+// silently falling back to the VPN would violate explicit direct mode.
+#[cfg(windows)]
+async fn direct_access_denied(binding: &Binding) -> bool {
+    use librqbit_dualstack_sockets::{BindDevice, ConnectOpts, Error, tcp_connect};
+
+    static CACHE: Mutex<Option<(Binding, Instant, bool)>> = Mutex::new(None);
+    if let Some((_, _, denied)) = CACHE
+        .lock()
+        .as_ref()
+        .filter(|(b, at, _)| b == binding && at.elapsed() < Duration::from_secs(30))
+    {
+        return *denied;
+    }
+    let Some(device) = binding
+        .device
+        .as_deref()
+        .and_then(|name| BindDevice::new_from_name(name).ok())
+    else {
+        return false;
+    };
+    let probe = |addr| {
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            tcp_connect(
+                addr,
+                ConnectOpts {
+                    bind_device: Some(&device),
+                    ..Default::default()
+                },
+            ),
+        )
+    };
+    let (first, second) = tokio::join!(
+        probe("1.1.1.1:443".parse().unwrap()),
+        probe("8.8.8.8:443".parse().unwrap())
+    );
+    let denied = [first, second].into_iter().all(|result| {
+        matches!(result, Ok(Err(Error::Connect(ref e)))
+            if e.kind() == std::io::ErrorKind::PermissionDenied)
+    });
+    *CACHE.lock() = Some((binding.clone(), Instant::now(), denied));
+    denied
 }
 
 pub(crate) fn spawn(engine: Arc<Engine>) {

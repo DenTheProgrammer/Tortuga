@@ -326,10 +326,14 @@ function Speed({ s, set }: P) {
 function Network({ s, set }: P) {
   const { t } = useT();
   const [ifaces, setIfaces] = useState<NetInterface[]>([]);
+  const [directDenied, setDirectDenied] = useState(false);
   useEffect(() => {
     api
       .network()
-      .then((n) => setIfaces(n.snapshot?.interfaces ?? []))
+      .then((n) => {
+        setIfaces(n.snapshot?.interfaces ?? []);
+        setDirectDenied(n.status.reason === "direct_access_denied");
+      })
       .catch(() => {});
   }, []);
   const modes: NetworkMode[] = ["auto", "system", "direct", "vpn_only"];
@@ -365,6 +369,7 @@ function Network({ s, set }: P) {
       {s.network.mode === "direct" && ifaceSelect(s.network.direct_interface, (v) => setNet({ direct_interface: v }), false)}
       {s.network.mode === "vpn_only" && ifaceSelect(s.network.vpn_interface, (v) => setNet({ vpn_interface: v }), true)}
       {(s.network.mode === "direct" || s.network.mode === "auto") && <div className="note">{t("vpnKillSwitchNote")}</div>}
+      {directDenied && (s.network.mode === "direct" || s.network.mode === "auto") && <div role="alert" className="note" style={{ color: "var(--red)" }}>{t("reason_direct_access_denied")}</div>}
       <div className="grid2">
         <NumField label={t("listenPort")} value={s.listen_port} onChange={(v) => set("listen_port", Math.min(65535, v))} />
         <NumField label={t("peerLimit")} value={s.peer_limit} onChange={(v) => set("peer_limit", Math.max(1, v))} />

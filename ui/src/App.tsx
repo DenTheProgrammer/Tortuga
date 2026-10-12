@@ -664,10 +664,10 @@ export default function App() {
               title={[net.vpn_name && `VPN: ${net.vpn_name}`, net.interface_name, t(`reason_${net.reason}` as Key)]
                 .filter((x) => x && !String(x).startsWith("reason_"))
                 .join(" · ")}
-              style={{ color: net.route === "blocked" ? "var(--red)" : net.route === "direct" && net.vpn_active ? "var(--accent)" : undefined }}
+              style={{ color: net.route === "blocked" || net.reason === "direct_access_denied" ? "var(--red)" : net.route === "direct" && net.vpn_active ? "var(--accent)" : undefined }}
             >
               {net.route === "blocked" ? <ShieldOff /> : net.route === "vpn" ? <Shield /> : net.vpn_active ? <ShieldAlert /> : <Network />}
-              {t(`net_${net.route}` as Key)}
+              {t(net.reason === "direct_access_denied" ? "net_direct_denied" : `net_${net.route}` as Key)}
               {net.vpn_active && net.route === "system" && " (VPN)"}
             </span>
           )}
