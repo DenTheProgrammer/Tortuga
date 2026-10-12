@@ -89,7 +89,13 @@ mod tests {
                 std::thread::spawn(move || usize::from(state.begin()))
             })
             .collect();
-        assert_eq!(threads.into_iter().map(|t| t.join().unwrap()).sum::<usize>(), 1);
+        assert_eq!(
+            threads
+                .into_iter()
+                .map(|t| t.join().unwrap())
+                .sum::<usize>(),
+            1
+        );
         assert!(state.is_requested());
         assert!(!state.is_ready());
         state.finish();

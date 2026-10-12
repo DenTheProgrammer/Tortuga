@@ -350,7 +350,10 @@ fn quit(app: &AppHandle) {
         let started = std::time::Instant::now();
         tracing::info!("shutdown requested");
         stop_engine(&app).await;
-        tracing::info!(elapsed_ms = started.elapsed().as_millis(), "shutdown cleanup finished");
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            "shutdown cleanup finished"
+        );
         app.state::<AppState>().shutdown.finish();
         app.exit(0);
     });
