@@ -16,7 +16,7 @@ use parking_lot::Mutex;
 use tracing::info;
 
 use crate::{
-    engine::{Engine, Event},
+    engine::{Engine, Event, Health},
     net::{self, Binding, NetSnapshot, NetStatus, NetworkMode, Route},
 };
 
@@ -27,6 +27,8 @@ const STARVED_BPS: u64 = 24 * 1024;
 const STARVED_MAX_PEERS: u32 = 2;
 /// DHT with this few nodes after the grace period means UDP is blocked.
 const DHT_MIN_NODES: usize = 8;
+/// Known-but-unreachable peers needed to blame the VPN rather than a dead swarm.
+const UNREACHABLE_PEERS: u32 = 4;
 
 #[derive(Default)]
 struct AutoState {
@@ -38,6 +40,46 @@ struct AutoState {
     bypassing: bool,
     /// Identity of the VPN interface the decision was made for.
     vpn_key: Option<String>,
+}
+
+impl AutoState {
+    /// One observation in auto mode while a VPN is up; returns whether to
+    /// bypass it.
+    fn step(&mut self, vpn_key: Option<String>, health: &Health, dht: bool, now: Instant) -> bool {
+        if self.vpn_key != vpn_key {
+            *self = AutoState {
+                vpn_key,
+                since: Some(now),
+                ..Default::default()
+            };
+        }
+        if self.bypassing {
+            return true;
+        }
+        let since = *self.since.get_or_insert(now);
+        let grace_over = now.duration_since(since) >= STARVED_FOR;
+        let dht_blocked = grace_over && dht && health.dht_nodes < DHT_MIN_NODES;
+        // Peers are known (trackers/DHT work) but we can't reach them. A dead
+        // swarm with no peers at all is not the VPN's fault.
+        let unreachable = health.seen_peers >= health.live_peers + UNREACHABLE_PEERS;
+        let starved = health.downloading > 0
+            && health.down_bps < STARVED_BPS
+            && health.live_peers <= STARVED_MAX_PEERS
+            && (unreachable || dht_blocked);
+        if starved {
+            self.starved_since.get_or_insert(now);
+        } else {
+            self.starved_since = None;
+        }
+        let starved_long = self
+            .starved_since
+            .is_some_and(|s| now.duration_since(s) >= STARVED_FOR);
+        if (dht_blocked && health.downloading > 0) || starved_long {
+            info!(?health, "VPN looks bad for P2P, bypassing it");
+            self.bypassing = true;
+        }
+        self.bypassing
+    }
 }
 
 static AUTO: Mutex<Option<AutoState>> = Mutex::new(None);
@@ -113,39 +155,8 @@ fn decide(engine: &Engine, snap: &NetSnapshot) -> Decision {
             }
             let vpn_key = snap.vpn.as_ref().map(|v| v.bind_name.clone());
             let health = engine.health();
-            let now = Instant::now();
-            let bypass = with_auto(|a| {
-                if a.vpn_key != vpn_key {
-                    *a = AutoState {
-                        vpn_key: vpn_key.clone(),
-                        since: Some(now),
-                        ..Default::default()
-                    };
-                }
-                if a.bypassing {
-                    return true;
-                }
-                let since = *a.since.get_or_insert(now);
-                let grace_over = now.duration_since(since) >= STARVED_FOR;
-                let dht_blocked =
-                    grace_over && engine.settings().dht && health.dht_nodes < DHT_MIN_NODES;
-                let starved = health.downloading > 0
-                    && health.down_bps < STARVED_BPS
-                    && health.live_peers <= STARVED_MAX_PEERS;
-                if starved {
-                    a.starved_since.get_or_insert(now);
-                } else {
-                    a.starved_since = None;
-                }
-                let starved_long = a
-                    .starved_since
-                    .is_some_and(|s| now.duration_since(s) >= STARVED_FOR);
-                if (dht_blocked && health.downloading > 0) || starved_long {
-                    info!(?health, "VPN looks bad for P2P, bypassing it");
-                    a.bypassing = true;
-                }
-                a.bypassing
-            });
+            let dht = engine.settings().dht;
+            let bypass = with_auto(|a| a.step(vpn_key, &health, dht, Instant::now()));
             match (bypass, &snap.physical) {
                 (true, Some(i)) => Decision {
                     binding: net::binding_for(i),
@@ -224,4 +235,90 @@ pub(crate) fn spawn(engine: Arc<Engine>) {
 
 pub fn interfaces() -> NetSnapshot {
     net::snapshot()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn health(downloading: u32, bps: u64, live: u32, seen: u32, dht: usize) -> Health {
+        Health {
+            downloading,
+            down_bps: bps,
+            live_peers: live,
+            seen_peers: seen,
+            dht_nodes: dht,
+        }
+    }
+
+    /// Feed the same health every 5 s for `secs`; return the final decision.
+    fn run(a: &mut AutoState, vpn: &str, h: Health, start: Instant, secs: u64) -> bool {
+        let mut out = false;
+        for t in (0..=secs).step_by(5) {
+            out = a.step(Some(vpn.into()), &h, true, start + Duration::from_secs(t));
+        }
+        out
+    }
+
+    #[test]
+    fn bypasses_when_peers_are_unreachable() {
+        let mut a = AutoState::default();
+        let t0 = Instant::now();
+        let h = health(1, 0, 0, 40, 300);
+        assert!(!run(&mut a, "wg0", h, t0, 60), "too early");
+        assert!(run(&mut a, "wg0", h, t0, 160));
+    }
+
+    #[test]
+    fn dead_swarm_is_not_the_vpns_fault() {
+        let mut a = AutoState::default();
+        assert!(!run(
+            &mut a,
+            "wg0",
+            health(1, 0, 0, 0, 300),
+            Instant::now(),
+            600
+        ));
+    }
+
+    #[test]
+    fn healthy_vpn_is_kept() {
+        let mut a = AutoState::default();
+        assert!(!run(
+            &mut a,
+            "wg0",
+            health(2, 3_000_000, 25, 60, 300),
+            Instant::now(),
+            600
+        ));
+        // Seeding only: nothing to judge by.
+        assert!(!run(
+            &mut a,
+            "wg0",
+            health(0, 0, 0, 50, 300),
+            Instant::now(),
+            600
+        ));
+    }
+
+    #[test]
+    fn blocked_dht_while_downloading_bypasses() {
+        let mut a = AutoState::default();
+        assert!(run(
+            &mut a,
+            "wg0",
+            health(1, 0, 0, 0, 0),
+            Instant::now(),
+            120
+        ));
+    }
+
+    #[test]
+    fn new_vpn_starts_over() {
+        let mut a = AutoState::default();
+        let t0 = Instant::now();
+        assert!(run(&mut a, "wg0", health(1, 0, 0, 40, 300), t0, 200));
+        let later = t0 + Duration::from_secs(300);
+        assert!(!a.step(Some("tun1".into()), &health(1, 0, 0, 40, 300), true, later));
+    }
 }

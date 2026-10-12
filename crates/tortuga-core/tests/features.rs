@@ -657,3 +657,53 @@ async fn create_torrents() {
     }
     a.shutdown().await;
 }
+
+/// The weekly scheduler: "off" hours pause everything, "turtle" hours apply
+/// the alternative limits, and both undo cleanly.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn scheduler_slots() {
+    use tortuga_core::settings::ScheduleSlot;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_files(&root.join("src"), &[("f.bin", data(200_000, 1))]);
+    let a = engine(root, "a", 0).await;
+    let (created, _) = seed(&a, &root.join("src/f.bin"), 64 * 1024).await;
+    let id = created.id;
+
+    let set_all = |slot: ScheduleSlot, enabled: bool| {
+        let mut s = a.settings();
+        s.scheduler.enabled = enabled;
+        s.scheduler.grid = vec![vec![slot; 24]; 7];
+        s
+    };
+
+    a.update_settings(set_all(ScheduleSlot::Off, true))
+        .await
+        .unwrap();
+    // A finished torrent that is stopped shows as completed rather than queued.
+    let t = wait(&a, &id, 10, "stopped by scheduler", |t| {
+        matches!(t.state, TorrentState::Queued | TorrentState::Completed)
+    })
+    .await;
+    assert!(!t.user_paused, "scheduler must not look like a user pause");
+
+    a.update_settings(set_all(ScheduleSlot::Alt, true))
+        .await
+        .unwrap();
+    wait(&a, &id, 10, "running again", |t| {
+        t.state == TorrentState::Seeding
+    })
+    .await;
+    assert!(a.state().session.alt_speed_active);
+
+    a.update_settings(set_all(ScheduleSlot::Off, false))
+        .await
+        .unwrap();
+    wait(&a, &id, 10, "disabled scheduler", |t| {
+        t.state == TorrentState::Seeding
+    })
+    .await;
+    assert!(!a.state().session.alt_speed_active);
+
+    a.shutdown().await;
+}

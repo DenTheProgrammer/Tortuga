@@ -137,10 +137,9 @@ pub struct RssStore {
     data: Mutex<RssData>,
 }
 
-static STORE: Mutex<Option<Arc<RssStore>>> = Mutex::new(None);
-
 pub fn store(engine: &Engine) -> Arc<RssStore> {
-    STORE
+    engine
+        .rss
         .lock()
         .get_or_insert_with(|| {
             let path = engine.data_dir.join("rss.json");

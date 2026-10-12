@@ -337,9 +337,12 @@ async fn h_rss_feed(
     let feed = rss::store(&e).upsert_feed(f)?;
     let e2 = e.clone();
     let id = feed.id.clone();
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         let _ = rss::refresh_feed(&e2, &id).await;
     });
+    // Give the first fetch a moment so the UI shows items right away; a slow
+    // feed keeps loading in the background.
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(15), task).await;
     Ok(Json(feed))
 }
 

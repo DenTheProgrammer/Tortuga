@@ -264,6 +264,8 @@ pub struct Engine {
     syncing_files: Mutex<HashSet<String>>,
     /// Torrents with a pause/unpause in flight.
     syncing_run: Mutex<HashSet<String>>,
+    /// Lazily loaded RSS feeds and rules.
+    pub(crate) rss: Mutex<Option<Arc<crate::rss::RssStore>>>,
     peer_prev: Mutex<HashMap<String, PeerPrev>>,
     global_pause: Mutex<GlobalPause>,
     scheduler_slot: Mutex<ScheduleSlot>,
@@ -394,6 +396,7 @@ impl Engine {
             ticks: Default::default(),
             syncing_files: Default::default(),
             syncing_run: Default::default(),
+            rss: Default::default(),
             peer_prev: Default::default(),
             global_pause: Default::default(),
             scheduler_slot: Mutex::new(ScheduleSlot::Normal),
@@ -935,9 +938,9 @@ impl Engine {
         let task_key = key.clone();
         let task = tokio::spawn(async move {
             let res = async {
-                this.resolve(&req).await?;
+                let resolved = this.resolve(&req).await?;
                 let session = this.session()?;
-                let cached = this.resolved.lock().remove(&task_key);
+                let cached = this.resolved.lock().remove(&resolved.id);
                 let (add, trackers, peers) = match cached {
                     Some(r) => (AddTorrent::from_bytes(r.bytes), r.trackers, r.peers),
                     None => (Self::request_to_add(&req)?, Vec::new(), Vec::new()),
@@ -1231,7 +1234,13 @@ impl Engine {
     pub fn state(&self) -> StateResponse {
         let mut torrents: Vec<TorrentSummary> =
             self.handles().iter().map(|h| self.summary(h)).collect();
-        torrents.extend(self.pending_summaries());
+        // A magnet that just got its metadata is briefly both pending and added.
+        let added: HashSet<String> = torrents.iter().map(|t| t.id.clone()).collect();
+        torrents.extend(
+            self.pending_summaries()
+                .into_iter()
+                .filter(|p| !added.contains(&p.id)),
+        );
         torrents.sort_by(|a, b| b.added_at.cmp(&a.added_at).then(a.name.cmp(&b.name)));
         let settings = self.settings();
         let (down_limit, up_limit) = self.effective_limits();
