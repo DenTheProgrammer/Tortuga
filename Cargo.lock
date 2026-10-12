@@ -5706,7 +5706,7 @@ checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 
 [[package]]
 name = "tortuga"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "parking_lot",
@@ -5730,7 +5730,7 @@ dependencies = [
 
 [[package]]
 name = "tortuga-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "axum",
