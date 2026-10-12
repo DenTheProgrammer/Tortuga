@@ -412,9 +412,7 @@ fn main() {
                 quitting: Mutex::new(false),
             });
 
-            if !isolated
-                && let Err(e) = assoc::register(true)
-            {
+            if !isolated && let Err(e) = assoc::register(true) {
                 tracing::warn!("can't register file associations: {e}");
             }
 
