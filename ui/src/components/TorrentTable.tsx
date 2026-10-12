@@ -28,7 +28,6 @@ const columns: { key: SortKey; label: Parameters<ReturnType<typeof useT>["t"]>[0
   { key: "up_speed", label: "up", width: 100, num: true },
   { key: "eta", label: "eta", width: 90, num: true },
   { key: "peers", label: "peers", width: 70, num: true },
-  { key: "ratio", label: "ratio", width: 70, num: true },
 ];
 
 /** Renders torrents in the given (already filtered and sorted) order. */
@@ -100,7 +99,6 @@ export function TorrentTable({
               <td className="num dim">{fmt.speed(tr.up_speed, lang)}</td>
               <td className="num dim">{fmt.duration(tr.eta, lang)}</td>
               <td className="num dim">{tr.peers || tr.peers_seen ? `${tr.peers} (${tr.peers_seen})` : ""}</td>
-              <td className="num dim">{fmt.ratio(tr.ratio)}</td>
             </tr>
           ))}
         </tbody>

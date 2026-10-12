@@ -273,6 +273,8 @@ export const api = {
     req("POST", `/api/torrents/${enc(id)}/files`, { priorities }),
   setOptions: (id: string, o: { sequential?: boolean; category?: string | null }) =>
     req("POST", `/api/torrents/${enc(id)}/options`, o),
+  downloadInOrder: (id: string, files: number[]) =>
+    req("POST", `/api/torrents/${enc(id)}/in-order`, { files }),
   play: (id: string, file: number) =>
     req<{ path: string; local_path: string; name: string }>(
       "POST",

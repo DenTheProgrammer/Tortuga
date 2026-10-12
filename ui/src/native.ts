@@ -167,8 +167,3 @@ export async function makeDefaultHandler() {
   if (!isTauri) return;
   await invoke("make_default_handler");
 }
-
-export async function setCloseToTray(enabled: boolean) {
-  if (!isTauri) return;
-  await invoke("set_close_to_tray", { enabled });
-}

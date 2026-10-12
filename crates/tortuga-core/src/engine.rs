@@ -251,6 +251,39 @@ fn file_path_string(components: impl Iterator<Item = String>) -> String {
     components.collect::<Vec<_>>().join("/")
 }
 
+pub fn is_video(path: &str) -> bool {
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "mp4"
+            | "m4v"
+            | "mkv"
+            | "webm"
+            | "mov"
+            | "avi"
+            | "ts"
+            | "m2ts"
+            | "mpg"
+            | "mpeg"
+            | "wmv"
+            | "flv"
+    )
+}
+
+/// Looks like a season of a show: several videos making up most of the size.
+/// Such torrents default to downloading files in order.
+pub fn looks_like_series<'a>(files: impl IntoIterator<Item = (&'a str, u64)>) -> bool {
+    let (mut videos, mut video_bytes, mut total) = (0usize, 0u64, 0u64);
+    for (path, len) in files {
+        total += len;
+        if is_video(path) {
+            videos += 1;
+            video_bytes += len;
+        }
+    }
+    videos >= 2 && video_bytes * 10 >= total * 7
+}
+
 pub fn is_streamable(path: &str) -> bool {
     let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
     matches!(
@@ -882,6 +915,23 @@ impl Engine {
             ),
             None => (0, None),
         };
+        if req.sequential.is_none()
+            && let Some(files) = info.as_ref().and_then(|t| t.info.data.files.as_ref())
+        {
+            let list: Vec<(String, u64)> = files
+                .iter()
+                .map(|f| {
+                    let last = f
+                        .path
+                        .last()
+                        .map(|p| String::from_utf8_lossy(p.as_ref()).into_owned());
+                    (last.unwrap_or_default(), f.length)
+                })
+                .collect();
+            if looks_like_series(list.iter().map(|(p, l)| (p.as_str(), *l))) {
+                meta.sequential = true;
+            }
+        }
 
         let output_folder = req
             .save_path
@@ -1275,6 +1325,19 @@ impl Engine {
         Ok(())
     }
 
+    /// "Download in order": the given files get high priority and the torrent
+    /// switches to sequential mode, so they arrive one after another by name.
+    pub async fn download_in_order(&self, id: &str, files: &[usize]) -> anyhow::Result<()> {
+        let changes: HashMap<usize, FilePriority> =
+            files.iter().map(|f| (*f, FilePriority::High)).collect();
+        self.meta.update(id, |m| m.sequential = true);
+        self.set_file_priorities(id, &changes).await?;
+        if self.handle(id)?.is_paused() && !self.meta.get(id).unwrap_or_default().user_paused {
+            self.resume(id).await?;
+        }
+        Ok(())
+    }
+
     pub fn set_options(
         &self,
         id: &str,
@@ -1500,6 +1563,19 @@ impl Engine {
 
     pub fn network_mode(&self) -> NetworkMode {
         self.settings.read().network.mode
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::looks_like_series;
+
+    #[test]
+    fn series_detection() {
+        let gb = 1 << 30;
+        assert!(looks_like_series([("e1.mkv", gb), ("e2.mkv", gb), ("s.srt", 1000)]));
+        assert!(!looks_like_series([("movie.mkv", 4 * gb), ("poster.jpg", 100_000)]));
+        assert!(!looks_like_series([("a.mp4", 1), ("b.mp4", 1), ("game.iso", gb)]));
     }
 }
 

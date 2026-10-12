@@ -46,7 +46,7 @@ export function Details({
 }: {
   id: string | null;
   onPlay: (torrentId: string, file: FileEntry) => void;
-  onFileContext: (torrentId: string, file: FileEntry, e: MouseEvent) => void;
+  onFileContext: (torrentId: string, files: FileEntry[], e: MouseEvent) => void;
 }) {
   const { t } = useT();
   const toast = useToast();
@@ -81,12 +81,29 @@ export function Details({
         ) : !details.data ? (
           <div className="placeholder">{details.error ?? t("st_metadata")}</div>
         ) : tab === "files" ? (
-          <FileTree
+          <>
+            <div className="toolbar">
+              <label className="check" title={t("sequentialHint")}>
+                <input
+                  type="checkbox"
+                  checked={details.data.summary.sequential}
+                  onChange={(e) =>
+                    api
+                      .setOptions(id, { sequential: e.target.checked })
+                      .then(details.refresh)
+                      .catch((er) => toast(String(er.message), true))
+                  }
+                />
+                {t("sequential")}
+              </label>
+            </div>
+            <FileTree
             files={details.data.files}
             onPriority={setPriority}
             onPlay={(f) => onPlay(id, f)}
-            onContext={(f, e) => onFileContext(id, f, e)}
-          />
+            onContext={(fs, e) => onFileContext(id, fs, e)}
+            />
+          </>
         ) : tab === "general" ? (
           <General d={details.data} />
         ) : tab === "peers" ? (

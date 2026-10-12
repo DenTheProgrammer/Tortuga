@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/tortuga-core"]
+members = ["crates/tortuga-core", "src-tauri"]
 exclude = ["vendor"]
 
 [workspace.package]

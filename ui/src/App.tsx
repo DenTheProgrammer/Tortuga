@@ -46,7 +46,6 @@ import {
   openPath,
   PlayerInfo,
   revealPath,
-  setCloseToTray,
 } from "./native";
 import { Logo } from "./components/Logo";
 import { SortKey, TorrentTable } from "./components/TorrentTable";
@@ -152,7 +151,6 @@ export default function App() {
     if (!settings) return;
     applyTheme(settings.theme);
     document.documentElement.lang = settings.language;
-    setCloseToTray(settings.close_to_tray).catch(() => {});
     if (settings.theme !== "system") return;
     const mq = matchMedia("(prefers-color-scheme: dark)");
     const on = () => applyTheme("system");
@@ -359,11 +357,15 @@ export default function App() {
     setMenu({ x: e.clientX, y: e.clientY, items });
   };
 
-  const fileMenu = (torrentId: string, file: FileEntry, e: ReactMouseEvent) => {
+  const fileMenu = (torrentId: string, files: FileEntry[], e: ReactMouseEvent) => {
     e.preventDefault();
+    if (!files.length) return;
+    const file = files[0];
+    const single = files.length === 1;
     const installed = players.filter((p) => p.path);
+    const indices = files.map((f) => f.index);
     const items: MenuItem[] = [
-      ...(file.streamable
+      ...(single && file.streamable
         ? [
             { label: t("stream"), icon: <Play />, onClick: () => play(torrentId, file) },
             ...(isTauri
@@ -392,25 +394,40 @@ export default function App() {
           ]
         : []),
       {
-        label: t("openFile"),
-        icon: <ExternalLink />,
-        disabled: !isTauri || file.done < file.length,
-        onClick: () => api.filePath(torrentId, file.index).then((p) => openPath(p.path)).catch(err),
-      },
-      {
-        label: t("openFolder"),
-        icon: <FolderOpen />,
-        disabled: !isTauri,
+        label: t("downloadInOrder"),
+        icon: <ListOrdered />,
         onClick: () =>
           api
-            .filePath(torrentId, file.index)
-            .then((p) => revealPath(file.done > 0 ? p.path : p.folder))
+            .downloadInOrder(torrentId, indices)
+            .then(() => toast(t("inOrderOk")))
             .catch(err),
       },
       { separator: true },
+      ...(single
+        ? [
+            {
+              label: t("openFile"),
+              icon: <ExternalLink />,
+              disabled: !isTauri || file.done < file.length,
+              onClick: () => api.filePath(torrentId, file.index).then((p) => openPath(p.path)).catch(err),
+            },
+            {
+              label: t("openFolder"),
+              icon: <FolderOpen />,
+              disabled: !isTauri,
+              onClick: () =>
+                api
+                  .filePath(torrentId, file.index)
+                  .then((p) => revealPath(file.done > 0 ? p.path : p.folder))
+                  .catch(err),
+            },
+            { separator: true },
+          ]
+        : []),
       ...(["high", "normal", "low", "skip"] as const).map((p) => ({
-        label: `${file.priority === p ? "✓ " : ""}${t(`pr_${p}` as Key)}`,
-        onClick: () => api.setPriorities(torrentId, { [file.index]: p }).catch(err),
+        label: `${files.every((f) => f.priority === p) ? "✓ " : ""}${t(`pr_${p}` as Key)}`,
+        onClick: () =>
+          api.setPriorities(torrentId, Object.fromEntries(indices.map((i) => [i, p]))).catch(err),
       })),
     ];
     setMenu({ x: e.clientX, y: e.clientY, items });

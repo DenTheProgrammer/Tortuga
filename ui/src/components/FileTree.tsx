@@ -58,11 +58,13 @@ export function FileTree({
   files: FileEntry[];
   onPriority: (indices: number[], p: FilePriority) => void;
   onPlay: (file: FileEntry) => void;
-  onContext: (file: FileEntry, e: MouseEvent) => void;
+  onContext: (files: FileEntry[], e: MouseEvent) => void;
 }) {
   const { t, lang } = useT();
   const tree = useMemo(() => buildTree(files), [files]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [anchor, setAnchor] = useState<number | null>(null);
   const byIndex = useMemo(() => new Map(files.map((f) => [f.index, f])), [files]);
 
   const priorityOf = (n: Node): FilePriority | "" => {
@@ -81,6 +83,28 @@ export function FileTree({
   const top = tree.children.length === 1 && !tree.children[0].file ? tree.children[0] : tree;
   walk(top, 0);
 
+  const isSelected = (n: Node) => n.indices.length > 0 && n.indices.every((i) => selected.has(i));
+
+  const select = (rowIdx: number, e: MouseEvent) => {
+    const node = rows[rowIdx].node;
+    if (e.shiftKey && anchor !== null) {
+      const [a, b] = [anchor, rowIdx].sort((x, y) => x - y);
+      setSelected(new Set(rows.slice(a, b + 1).flatMap((r) => r.node.indices)));
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) {
+      setSelected((s) => {
+        const n = new Set(s);
+        const on = !isSelected(node);
+        node.indices.forEach((i) => (on ? n.add(i) : n.delete(i)));
+        return n;
+      });
+    } else {
+      setSelected(new Set(node.indices));
+    }
+    setAnchor(rowIdx);
+  };
+
   const toggle = (path: string) =>
     setCollapsed((s) => {
       const n = new Set(s);
@@ -98,16 +122,26 @@ export function FileTree({
         <div>{t("priority")}</div>
         <div />
       </div>
-      {rows.map(({ node, depth }) => {
+      {rows.map(({ node, depth }, rowIdx) => {
         const p = priorityOf(node);
         const progress = node.length ? node.done / node.length : 0;
         const f = node.file;
         return (
           <div
             key={node.path + (f ? `#${f.index}` : "")}
-            className={`row ${p === "skip" ? "skipped" : ""}`}
+            className={`row ${p === "skip" ? "skipped" : ""} ${isSelected(node) ? "selected" : ""}`}
+            onMouseDown={(e) => {
+              if ((e.target as HTMLElement).closest("select, button, .twisty")) return;
+              if (e.button === 2 && isSelected(node)) return;
+              select(rowIdx, e);
+            }}
             onContextMenu={(e) => {
-              if (f) onContext(f, e);
+              e.preventDefault();
+              const sel = isSelected(node) ? selected : new Set(node.indices);
+              onContext(
+                [...sel].map((i) => byIndex.get(i)!).filter(Boolean),
+                e,
+              );
             }}
             onDoubleClick={() => f?.streamable && onPlay(f)}
           >

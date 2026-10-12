@@ -235,6 +235,20 @@ async fn h_options(
     Ok(ok())
 }
 
+#[derive(Deserialize)]
+struct InOrderBody {
+    files: Vec<usize>,
+}
+
+async fn h_in_order(
+    State(e): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<InOrderBody>,
+) -> ApiResult<impl IntoResponse> {
+    e.download_in_order(&id, &b.files).await?;
+    Ok(ok())
+}
+
 fn stream_path(e: &Engine, id: &str, file: usize, name: &str) -> String {
     let name: String =
         url::form_urlencoded::byte_serialize(name.rsplit('/').next().unwrap_or(name).as_bytes())
@@ -448,6 +462,7 @@ pub fn router(engine: Arc<Engine>, ui_dir: Option<PathBuf>) -> Router {
         .route("/api/torrents/{id}/resume", post(h_resume))
         .route("/api/torrents/{id}/files", post(h_priorities))
         .route("/api/torrents/{id}/options", post(h_options))
+        .route("/api/torrents/{id}/in-order", post(h_in_order))
         .route("/api/torrents/{id}/files/{file}/play", post(h_play))
         .route("/api/torrents/{id}/files/{file}/path", get(h_file_path))
         .route("/api/torrents/{id}/torrent-file", get(h_torrent_file))

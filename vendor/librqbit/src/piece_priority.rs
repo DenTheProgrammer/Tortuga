@@ -73,8 +73,16 @@ impl FilePriorities {
         };
 
         let mut order = (0..file_infos.len()).collect::<Vec<usize>>();
-        // Stable sort keeps the torrent's natural file order inside a tier.
-        order.sort_by_key(|id| std::cmp::Reverse(config.tier(*id)));
+        // Inside a tier go by file name with numbers compared numerically,
+        // so "S01E2" comes before "S01E10" regardless of the torrent's own order.
+        order.sort_by(|a, b| {
+            config.tier(*b).cmp(&config.tier(*a)).then_with(|| {
+                natural_cmp(
+                    &file_infos[*a].relative_filename.to_string_lossy(),
+                    &file_infos[*b].relative_filename.to_string_lossy(),
+                )
+            })
+        });
 
         if config.sequential {
             return Self {
@@ -101,6 +109,44 @@ impl FilePriorities {
         Self {
             order,
             piece_order: Some(pieces),
+        }
+    }
+}
+
+/// Compare strings treating runs of digits as numbers ("e2" < "e10"), case-insensitively.
+pub fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (mut a, mut b) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (a.peek().copied(), b.peek().copied()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                let mut na = String::new();
+                while let Some(c) = a.peek().copied().filter(|c| c.is_ascii_digit()) {
+                    na.push(c);
+                    a.next();
+                }
+                let mut nb = String::new();
+                while let Some(c) = b.peek().copied().filter(|c| c.is_ascii_digit()) {
+                    nb.push(c);
+                    b.next();
+                }
+                let (ta, tb) = (na.trim_start_matches('0'), nb.trim_start_matches('0'));
+                let ord = ta.len().cmp(&tb.len()).then_with(|| ta.cmp(tb));
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+            (Some(x), Some(y)) => {
+                let ord = x.to_lowercase().cmp(y.to_lowercase());
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+                a.next();
+                b.next();
+            }
         }
     }
 }
@@ -142,6 +188,20 @@ mod tests {
         let p = FilePriorities::compute(&fi, Some(&cfg), 0);
         assert_eq!(p.order, vec![1, 2, 0]);
         assert!(p.piece_order.is_none());
+    }
+
+    #[test]
+    fn sequential_uses_natural_name_order() {
+        let mut fi = files(&[(0, 1), (1, 2), (2, 3), (3, 4)]);
+        for (f, name) in fi.iter_mut().zip(["Show.E10.mkv", "Show.E2.mkv", "Show.E1.mkv", "extras.txt"]) {
+            f.relative_filename = name.into();
+        }
+        let cfg = PiecePriorityConfig {
+            file_tiers: vec![3, 3, 3, 2],
+            sequential: true,
+        };
+        let p = FilePriorities::compute(&fi, Some(&cfg), 0);
+        assert_eq!(p.order, vec![2, 1, 0, 3]);
     }
 
     #[test]

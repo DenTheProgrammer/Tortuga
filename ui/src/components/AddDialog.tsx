@@ -6,6 +6,16 @@ import * as fmt from "../format";
 import { isTauri, pickFolder, pickTorrentFile } from "../native";
 import { Check, Dialog, Field, useToast } from "./ui";
 
+const VIDEO = /\.(mp4|m4v|mkv|webm|mov|avi|ts|m2ts|mpg|mpeg|wmv|flv)$/i;
+
+/** Same rule as the engine: 2+ videos making up most of the size = a series. */
+function looksLikeSeries(files: { path: string; length: number }[]) {
+  const videos = files.filter((f) => VIDEO.test(f.path));
+  const total = files.reduce((s, f) => s + f.length, 0);
+  const vbytes = videos.reduce((s, f) => s + f.length, 0);
+  return videos.length >= 2 && vbytes * 10 >= total * 7;
+}
+
 export interface AddSource {
   source?: string;
   torrent_base64?: string;
@@ -54,6 +64,7 @@ export function AddDialog({
         if (my !== reqId.current) return;
         setResolved(r);
         setWanted(new Set(r.files.map((f) => f.index)));
+        if (looksLikeSeries(r.files)) setSequential(true);
       })
       .catch((e) => my === reqId.current && setError(String(e.message ?? e)))
       .finally(() => my === reqId.current && setResolving(false));

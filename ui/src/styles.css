@@ -427,14 +427,14 @@ table.grid {
 .pbar {
   position: relative;
   height: 16px;
-  border-radius: 4px;
+  border-radius: 2px;
   background: var(--bar-bg);
   overflow: hidden;
 }
 
 .pbar > div {
   height: 100%;
-  border-radius: 4px;
+  border-radius: 0;
   transition: width 0.4s;
 }
 
@@ -586,7 +586,7 @@ table.grid {
 .piecebar {
   margin: 12px 16px 4px;
   height: 14px;
-  border-radius: 4px;
+  border-radius: 2px;
   overflow: hidden;
   background: var(--bar-bg);
 }
@@ -609,6 +609,10 @@ table.grid {
 
 .ftree .row:hover {
   background: var(--bg-hover);
+}
+
+.ftree .row.selected {
+  background: var(--bg-active);
 }
 
 .ftree .head {
