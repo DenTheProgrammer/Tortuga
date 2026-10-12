@@ -94,7 +94,8 @@ export function AddDialog({
         ...request(src),
         save_path: savePath !== settings.download_dir ? savePath : undefined,
         paused: !start,
-        sequential,
+        // Before the file list is known, let the backend detect series itself.
+        sequential: resolved ? sequential : sequential || undefined,
         category: category || undefined,
         priorities,
       });

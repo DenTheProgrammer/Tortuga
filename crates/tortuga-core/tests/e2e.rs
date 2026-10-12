@@ -122,7 +122,10 @@ async fn seed_download_priorities_and_stream() {
         .unwrap();
     assert_eq!(added.id, created.id);
 
-    wait_for(&b, &added.id, |t| t.progress >= 1.0).await;
+    wait_for(&b, &added.id, |t| {
+        matches!(t.state, TorrentState::Seeding | TorrentState::Completed)
+    })
+    .await;
 
     let details = b.details(&added.id).unwrap();
     let out_dir = std::path::PathBuf::from(&details.summary.save_path);

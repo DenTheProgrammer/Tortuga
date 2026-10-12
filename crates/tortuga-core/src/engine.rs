@@ -63,7 +63,7 @@ pub enum Event {
     },
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TorrentState {
     Metadata,
@@ -155,7 +155,7 @@ pub struct ResolveResponse {
     pub already_added: bool,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AddRequest {
     /// Magnet link, http(s) URL of a .torrent, or local .torrent path.
@@ -203,7 +203,16 @@ struct Pending {
     name: String,
     error: Option<String>,
     added_at: i64,
+    req: AddRequest,
     task: Option<tokio::task::JoinHandle<()>>,
+}
+
+/// A magnet / URL still waiting for metadata, kept across restarts.
+#[derive(Serialize, Deserialize)]
+struct SavedPending {
+    key: String,
+    added_at: i64,
+    req: AddRequest,
 }
 
 struct Resolved {
@@ -251,6 +260,10 @@ pub struct Engine {
     pending: Mutex<HashMap<String, Pending>>,
     resolved: Mutex<HashMap<String, Resolved>>,
     ticks: Mutex<HashMap<String, TickState>>,
+    /// Torrents with a file-selection update in flight.
+    syncing_files: Mutex<HashSet<String>>,
+    /// Torrents with a pause/unpause in flight.
+    syncing_run: Mutex<HashSet<String>>,
     peer_prev: Mutex<HashMap<String, PeerPrev>>,
     global_pause: Mutex<GlobalPause>,
     scheduler_slot: Mutex<ScheduleSlot>,
@@ -379,6 +392,8 @@ impl Engine {
             pending: Default::default(),
             resolved: Default::default(),
             ticks: Default::default(),
+            syncing_files: Default::default(),
+            syncing_run: Default::default(),
             peer_prev: Default::default(),
             global_pause: Default::default(),
             scheduler_slot: Mutex::new(ScheduleSlot::Normal),
@@ -392,6 +407,7 @@ impl Engine {
         engine.start_session(binding).await?;
         engine.apply_scheduler();
         engine.apply_limits();
+        engine.restore_pending();
         engine.clone().spawn_background();
         Ok(engine)
     }
@@ -679,14 +695,22 @@ impl Engine {
     // Adding torrents
     // ---------------------------------------------------------------------
 
+    /// A 40-char hex or 32-char base32 info hash pasted alone, as a magnet link.
+    fn bare_hash_magnet(source: &str) -> Option<String> {
+        let s = source.trim();
+        let base32 = |c: char| c.is_ascii_alphabetic() || ('2'..='7').contains(&c);
+        ((s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit()))
+            || (s.len() == 32 && s.chars().all(base32)))
+        .then(|| format!("magnet:?xt=urn:btih:{s}"))
+    }
+
     fn source_to_add(source: &str) -> anyhow::Result<AddTorrent<'static>> {
         let s = source.trim();
         if s.starts_with("magnet:") || s.starts_with("http://") || s.starts_with("https://") {
             return Ok(AddTorrent::from_url(s.to_owned()));
         }
-        // 40-char hex or 32-char base32 info hash pasted alone.
-        if (s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())) || s.len() == 32 {
-            return Ok(AddTorrent::from_url(format!("magnet:?xt=urn:btih:{s}")));
+        if let Some(m) = Self::bare_hash_magnet(s) {
+            return Ok(AddTorrent::from_url(m));
         }
         let path = Path::new(s);
         if path.exists() {
@@ -715,15 +739,40 @@ impl Engine {
             .unwrap_or_default()
     }
 
+    /// Peers given with the request plus `x.pe` hints from a magnet link.
+    fn hinted_peers(req: &AddRequest) -> Vec<SocketAddr> {
+        let from_magnet = req
+            .source
+            .as_deref()
+            .filter(|s| s.trim().starts_with("magnet:"))
+            .and_then(|s| url::Url::parse(s.trim()).ok())
+            .map(|u| {
+                u.query_pairs()
+                    .filter(|(k, _)| k == "x.pe")
+                    .map(|(_, v)| v.into_owned())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        req.peers
+            .iter()
+            .flatten()
+            .cloned()
+            .chain(from_magnet)
+            .filter_map(|p| p.trim().parse::<SocketAddr>().ok())
+            .collect()
+    }
+
     /// Fetch metadata without adding (for the "add torrent" dialog).
     pub async fn resolve(&self, req: &AddRequest) -> anyhow::Result<ResolveResponse> {
         let session = self.session()?;
         let add = Self::request_to_add(req)?;
+        let peers = Self::hinted_peers(req);
         let resp = session
             .add_torrent(
                 add,
                 Some(AddTorrentOptions {
                     list_only: true,
+                    initial_peers: (!peers.is_empty()).then_some(peers),
                     ..Default::default()
                 }),
             )
@@ -797,7 +846,10 @@ impl Engine {
 
     /// Add a torrent. Magnets without cached metadata are resolved in the
     /// background and shown as "metadata" rows until ready.
-    pub async fn add(self: &Arc<Self>, req: AddRequest) -> anyhow::Result<AddResponse> {
+    pub async fn add(self: &Arc<Self>, mut req: AddRequest) -> anyhow::Result<AddResponse> {
+        if let Some(m) = req.source.as_deref().and_then(Self::bare_hash_magnet) {
+            req.source = Some(m);
+        }
         // Fast path: we already have the metadata (from resolve()) or a .torrent.
         let known_hash = match (&req.torrent_base64, req.source.as_deref()) {
             (Some(_), _) => None,
@@ -844,12 +896,40 @@ impl Engine {
         req: AddRequest,
         known_hash: Option<String>,
     ) -> anyhow::Result<AddResponse> {
-        let source = req.source.clone().unwrap_or_default();
         let key = known_hash.unwrap_or_else(|| format!("url-{}", crate::util::random_token()));
+        if self.pending.lock().contains_key(&key) {
+            return Ok(AddResponse {
+                id: key,
+                already_added: true,
+            });
+        }
+        self.spawn_pending(key.clone(), req, now_ts());
+        self.save_pending();
+        Ok(AddResponse {
+            id: key,
+            already_added: false,
+        })
+    }
+
+    fn spawn_pending(self: &Arc<Self>, key: String, req: AddRequest, added_at: i64) {
+        let source = req.source.clone().unwrap_or_default();
         let name = Magnet::parse(source.trim())
             .ok()
             .and_then(|m| m.name)
+            .or_else(|| (!key.starts_with("url-")).then(|| key.clone()))
             .unwrap_or_else(|| source.chars().take(80).collect());
+        // Register before the task starts so a fast resolve can't finish first
+        // and leave a stale "metadata" row behind.
+        self.pending.lock().insert(
+            key.clone(),
+            Pending {
+                name,
+                error: None,
+                added_at,
+                req: req.clone(),
+                task: None,
+            },
+        );
 
         let this = self.clone();
         let task_key = key.clone();
@@ -868,6 +948,7 @@ impl Engine {
             match res {
                 Ok(_) => {
                     this.pending.lock().remove(&task_key);
+                    this.save_pending();
                 }
                 Err(e) => {
                     warn!("error adding torrent: {e:#}");
@@ -881,19 +962,50 @@ impl Engine {
                 }
             }
         });
-        self.pending.lock().insert(
-            key.clone(),
-            Pending {
-                name,
-                error: None,
-                added_at: now_ts(),
-                task: Some(task),
-            },
-        );
-        Ok(AddResponse {
-            id: key,
-            already_added: false,
-        })
+        if let Some(p) = self.pending.lock().get_mut(&key) {
+            p.task = Some(task);
+        } else {
+            // Removed (or finished) in the meantime.
+            task.abort();
+        }
+    }
+
+    fn pending_path(&self) -> PathBuf {
+        self.data_dir.join("pending.json")
+    }
+
+    fn save_pending(&self) {
+        let saved: Vec<SavedPending> = self
+            .pending
+            .lock()
+            .iter()
+            .map(|(key, p)| SavedPending {
+                key: key.clone(),
+                added_at: p.added_at,
+                req: p.req.clone(),
+            })
+            .collect();
+        if let Err(e) = crate::util::write_json_atomic(&self.pending_path(), &saved) {
+            warn!("error saving pending torrents: {e:#}");
+        }
+    }
+
+    /// Magnets added last time whose metadata never arrived: try again.
+    fn restore_pending(self: &Arc<Self>) {
+        let saved: Vec<SavedPending> = std::fs::read(self.pending_path())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        for p in saved {
+            let already = parse_hash(&p.key)
+                .ok()
+                .and_then(|h| self.session().ok()?.get(TorrentIdOrHash::Hash(h)))
+                .is_some();
+            if !already {
+                self.spawn_pending(p.key, p.req, p.added_at);
+            }
+        }
+        self.save_pending();
     }
 
     async fn add_now(
@@ -907,12 +1019,11 @@ impl Engine {
         let settings = self.settings();
         let paused = req.paused.unwrap_or(settings.start_paused);
         let mut peers = peers;
-        peers.extend(
-            req.peers
-                .iter()
-                .flatten()
-                .filter_map(|p| p.trim().parse::<SocketAddr>().ok()),
-        );
+        for p in Self::hinted_peers(req) {
+            if !peers.contains(&p) {
+                peers.push(p);
+            }
+        }
         let mut meta = TorrentMeta::new(req.sequential.unwrap_or(settings.default_sequential));
         meta.priorities = req.priorities.clone().unwrap_or_default();
         meta.category = req.category.clone().filter(|c| !c.trim().is_empty());
@@ -1300,10 +1411,12 @@ impl Engine {
     }
 
     pub async fn remove(&self, id: &str, delete_files: bool) -> anyhow::Result<()> {
-        if let Some(p) = self.pending.lock().remove(id) {
+        let pending = self.pending.lock().remove(id);
+        if let Some(p) = pending {
             if let Some(t) = p.task {
                 t.abort();
             }
+            self.save_pending();
             return Ok(());
         }
         let hash = parse_hash(id)?;
@@ -1350,6 +1463,8 @@ impl Engine {
             if wanted.is_empty() {
                 // Nothing selected: keep files as is but stop downloading.
                 self.pause(id).await?;
+            } else if matches!(h.stats().state, TorrentStatsState::Initializing { .. }) {
+                // Still checking files; `sync_only_files` applies it when done.
             } else {
                 self.session()?.update_only_files(&h, &wanted).await?;
             }
@@ -1444,20 +1559,29 @@ impl Engine {
         Ok((stream, name.to_string_lossy().into_owned()))
     }
 
+    /// Pause every torrent; one failing torrent doesn't stop the rest.
     pub async fn pause_all(&self) -> anyhow::Result<()> {
+        let mut last_err = None;
         for h in self.handles() {
             let id = hash_str(&h.info_hash());
-            self.pause(&id).await?;
+            if let Err(e) = self.pause(&id).await {
+                warn!(%id, "pause failed: {e:#}");
+                last_err = Some(e);
+            }
         }
-        Ok(())
+        last_err.map_or(Ok(()), Err)
     }
 
     pub async fn resume_all(&self) -> anyhow::Result<()> {
+        let mut last_err = None;
         for h in self.handles() {
             let id = hash_str(&h.info_hash());
-            self.resume(&id).await?;
+            if let Err(e) = self.resume(&id).await {
+                warn!(%id, "resume failed: {e:#}");
+                last_err = Some(e);
+            }
         }
-        Ok(())
+        last_err.map_or(Ok(()), Err)
     }
 
     pub fn file_path(&self, id: &str, file: usize) -> anyhow::Result<PathBuf> {
@@ -1562,6 +1686,74 @@ impl Engine {
         });
     }
 
+    /// Bring librqbit's file selection in line with the stored priorities
+    /// (changes made while a torrent was still checking are applied here).
+    fn sync_only_files(self: &Arc<Self>, h: &TorrentHandle) {
+        if matches!(h.stats().state, TorrentStatsState::Initializing { .. }) {
+            return;
+        }
+        let Some(n) = h.metadata.load().as_ref().map(|m| m.file_infos.len()) else {
+            return;
+        };
+        let id = hash_str(&h.info_hash());
+        let Some(meta) = self.meta.get(&id) else {
+            return;
+        };
+        let wanted: HashSet<usize> = (0..n)
+            .filter(|i| meta.priorities.get(*i).copied().unwrap_or_default() != FilePriority::Skip)
+            .collect();
+        let current: HashSet<usize> = h
+            .only_files()
+            .map(|v| v.into_iter().collect())
+            .unwrap_or_else(|| (0..n).collect());
+        if wanted.is_empty() || wanted == current || !self.syncing_files.lock().insert(id.clone()) {
+            return;
+        }
+        let this = self.clone();
+        let h = h.clone();
+        tokio::spawn(async move {
+            if let Ok(session) = this.session()
+                && let Err(e) = session.update_only_files(&h, &wanted).await
+            {
+                warn!(%id, "error updating selected files: {e:#}");
+            }
+            this.syncing_files.lock().remove(&id);
+        });
+    }
+
+    /// Make the torrent's running state match what the user chose (a Start or
+    /// Pause pressed while it was still checking files would otherwise be lost).
+    fn sync_run_state(self: &Arc<Self>, h: &TorrentHandle) {
+        let is_paused = match h.stats().state {
+            TorrentStatsState::Paused => true,
+            TorrentStatsState::Live => false,
+            _ => return,
+        };
+        let id = hash_str(&h.info_hash());
+        let Some(meta) = self.meta.get(&id) else {
+            return;
+        };
+        let should_run = !meta.user_paused && !self.global_pause.lock().any();
+        if should_run != is_paused || !self.syncing_run.lock().insert(id.clone()) {
+            return;
+        }
+        let this = self.clone();
+        let h = h.clone();
+        tokio::spawn(async move {
+            if let Ok(session) = this.session() {
+                let res = if should_run {
+                    session.unpause(&h).await
+                } else {
+                    session.pause(&h).await
+                };
+                if let Err(e) = res {
+                    warn!(%id, "error changing torrent state: {e:#}");
+                }
+            }
+            this.syncing_run.lock().remove(&id);
+        });
+    }
+
     fn tick(self: &Arc<Self>) {
         // Session-wide speed history for the graph.
         if let Some(s) = self.session.read().as_ref() {
@@ -1581,6 +1773,8 @@ impl Engine {
         let ratio_limit = self.settings.read().seed_ratio_limit;
         for h in self.handles() {
             self.handle_missing_files(&h);
+            self.sync_only_files(&h);
+            self.sync_run_state(&h);
             let id = hash_str(&h.info_hash());
             let stats = h.stats();
             let Some(live) = stats.live.as_ref() else {

@@ -119,7 +119,10 @@ async fn resume_and_missing_files() {
     .unwrap();
     // Series are detected and downloaded in order.
     assert!(get(&b, &id).unwrap().sequential);
-    wait(&b, &id, 60, "partial download", |t| t.progress > 0.3).await;
+    wait(&b, &id, 60, "partial download", |t| {
+        t.state != TorrentState::Checking && t.progress > 0.3
+    })
+    .await;
     let before = get(&b, &id).unwrap().done;
     b.shutdown().await;
     drop(b);
@@ -142,7 +145,10 @@ async fn resume_and_missing_files() {
         get(&b, &id).unwrap().done
     );
     reconnect(&b, &id, &peer).await;
-    wait(&b, &id, 60, "complete", |t| t.progress >= 1.0).await;
+    wait(&b, &id, 60, "complete", |t| {
+        matches!(t.state, TorrentState::Seeding | TorrentState::Completed)
+    })
+    .await;
     let out = std::path::PathBuf::from(get(&b, &id).unwrap().save_path);
     for (n, d) in &files {
         assert!(std::fs::read(out.join(n)).unwrap() == *d, "{n} differs");
@@ -203,7 +209,10 @@ async fn resume_and_missing_files() {
     .await;
     b.resume(&id).await.unwrap();
     reconnect(&b, &id, &peer).await;
-    wait(&b, &id, 60, "re-download", |t| t.progress >= 1.0).await;
+    wait(&b, &id, 60, "re-download", |t| {
+        matches!(t.state, TorrentState::Seeding | TorrentState::Completed)
+    })
+    .await;
     // E01 stays skipped (deleted on purpose in step 3); the rest is back.
     assert_eq!(
         b.details(&id).unwrap().files[e01.index].priority,

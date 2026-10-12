@@ -1,6 +1,9 @@
 //! Creating .torrent files from local files or folders.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::{Context, bail};
 use base64::Engine as _;
@@ -35,10 +38,27 @@ pub struct CreateResponse {
     pub saved_to: Option<String>,
 }
 
+/// True if `path` is a non-empty file or a folder containing one.
+fn has_data(path: &Path) -> bool {
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_file() => m.len() > 0,
+        Ok(m) if m.is_dir() => std::fs::read_dir(path)
+            .map(|rd| rd.flatten().any(|e| has_data(&e.path())))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
 pub async fn create(engine: &Arc<Engine>, req: CreateRequest) -> anyhow::Result<CreateResponse> {
     let path = PathBuf::from(req.path.trim());
     if !path.exists() {
         bail!("path does not exist: {}", path.display());
+    }
+    if !has_data(&path) {
+        bail!(
+            "nothing to share: {} has no non-empty files",
+            path.display()
+        );
     }
     if let Some(pl) = req.piece_length
         && (!pl.is_power_of_two() || pl < 16 * 1024)
@@ -92,6 +112,10 @@ pub async fn create(engine: &Arc<Engine>, req: CreateRequest) -> anyhow::Result<
             let mut out = PathBuf::from(p.trim());
             if out.is_dir() {
                 out = out.join(format!("{name}.torrent"));
+            }
+            if let Some(parent) = out.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("can't create {}", parent.display()))?;
             }
             std::fs::write(&out, &bytes)
                 .with_context(|| format!("can't write {}", out.display()))?;
