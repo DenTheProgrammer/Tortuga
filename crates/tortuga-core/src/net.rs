@@ -282,12 +282,15 @@ mod tests {
     #[test]
     fn prefers_wifi_with_gateway_over_wsl_ethernet_without_one() {
         let wifi = iface("Wi-Fi", "wifi", false, false, [192, 168, 1, 98]);
-        let mut wsl = iface("vEthernet (WSL)", "ethernet", false, false, [172, 22, 64, 1]);
+        let mut wsl = iface(
+            "vEthernet (WSL)",
+            "ethernet",
+            false,
+            false,
+            [172, 22, 64, 1],
+        );
         wsl.has_gateway = false;
         let vpn = iface("tun2", "tunnel", true, true, [10, 33, 0, 2]);
-        assert_eq!(
-            pick_physical(&[wifi, wsl, vpn]).unwrap().bind_name,
-            "Wi-Fi"
-        );
+        assert_eq!(pick_physical(&[wifi, wsl, vpn]).unwrap().bind_name, "Wi-Fi");
     }
 }
