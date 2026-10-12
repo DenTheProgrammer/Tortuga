@@ -204,6 +204,8 @@ struct Pending {
     error: Option<String>,
     added_at: i64,
     req: AddRequest,
+    /// Info hash once the metadata is known (URL sources start without one).
+    resolved_id: Option<String>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -930,6 +932,7 @@ impl Engine {
                 error: None,
                 added_at,
                 req: req.clone(),
+                resolved_id: None,
                 task: None,
             },
         );
@@ -939,6 +942,9 @@ impl Engine {
         let task = tokio::spawn(async move {
             let res = async {
                 let resolved = this.resolve(&req).await?;
+                if let Some(p) = this.pending.lock().get_mut(&task_key) {
+                    p.resolved_id = Some(resolved.id.clone());
+                }
                 let session = this.session()?;
                 let cached = this.resolved.lock().remove(&resolved.id);
                 let (add, trackers, peers) = match cached {
@@ -1236,11 +1242,15 @@ impl Engine {
             self.handles().iter().map(|h| self.summary(h)).collect();
         // A magnet that just got its metadata is briefly both pending and added.
         let added: HashSet<String> = torrents.iter().map(|t| t.id.clone()).collect();
-        torrents.extend(
-            self.pending_summaries()
-                .into_iter()
-                .filter(|p| !added.contains(&p.id)),
-        );
+        let resolved: HashMap<String, String> = self
+            .pending
+            .lock()
+            .iter()
+            .filter_map(|(k, p)| Some((k.clone(), p.resolved_id.clone()?)))
+            .collect();
+        torrents.extend(self.pending_summaries().into_iter().filter(|p| {
+            !added.contains(&p.id) && resolved.get(&p.id).is_none_or(|r| !added.contains(r))
+        }));
         torrents.sort_by(|a, b| b.added_at.cmp(&a.added_at).then(a.name.cmp(&b.name)));
         let settings = self.settings();
         let (down_limit, up_limit) = self.effective_limits();
