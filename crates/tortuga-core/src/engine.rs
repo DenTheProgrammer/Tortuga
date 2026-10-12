@@ -21,7 +21,7 @@ use librqbit::{
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     meta::{FilePriority, MetaStore, TorrentMeta},
@@ -1574,7 +1574,20 @@ impl Engine {
             .as_ref()
             .and_then(|m| m.file_infos.get(file).map(|f| f.relative_filename.clone()))
             .context("no such file")?;
-        let stream = h.clone().stream(file).await?;
+        // Right after a resume or a file-selection change the torrent may be
+        // between states for a moment; don't fail the player's request for that.
+        let mut attempt = 0;
+        let stream = loop {
+            match h.clone().stream(file).await {
+                Ok(s) => break s,
+                Err(e) if attempt < 50 && !matches!(h.stats().state, TorrentStatsState::Error) => {
+                    debug!(%id, "stream not ready yet: {e:#}");
+                    attempt += 1;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(e) => return Err(e),
+            }
+        };
         Ok((stream, name.to_string_lossy().into_owned()))
     }
 

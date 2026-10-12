@@ -66,8 +66,15 @@ async fn range(client: &reqwest::Client, url: &str, from: usize, to: usize) -> (
             .send()
             .await
             .unwrap();
-        assert_eq!(resp.status(), 206);
-        resp.bytes().await.unwrap().to_vec()
+        let status = resp.status();
+        let body = resp.bytes().await.unwrap().to_vec();
+        assert_eq!(
+            status,
+            206,
+            "{}",
+            String::from_utf8_lossy(&body[..body.len().min(500)])
+        );
+        body
     };
     let body = tokio::time::timeout(Duration::from_secs(30), fut)
         .await
