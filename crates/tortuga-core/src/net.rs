@@ -285,6 +285,9 @@ mod tests {
         let mut wsl = iface("vEthernet (WSL)", "ethernet", false, false, [172, 22, 64, 1]);
         wsl.has_gateway = false;
         let vpn = iface("tun2", "tunnel", true, true, [10, 33, 0, 2]);
-        assert_eq!(pick_physical(&[wifi, wsl, vpn]).unwrap().bind_name, "Wi-Fi");
+        assert_eq!(
+            pick_physical(&[wifi, wsl, vpn]).unwrap().bind_name,
+            "Wi-Fi"
+        );
     }
 }
