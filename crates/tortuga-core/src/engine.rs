@@ -125,6 +125,7 @@ pub struct TorrentDetails {
     pub trackers: Vec<String>,
     pub comment: Option<String>,
     pub private: bool,
+    pub transfer: crate::transfer::TransferSnapshot,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -228,6 +229,9 @@ struct TickState {
     last_fetched: u64,
     last_uploaded: u64,
     seen_unfinished: bool,
+    last_at: Option<Instant>,
+    was_active: bool,
+    was_downloading: bool,
 }
 
 #[derive(Default)]
@@ -534,6 +538,7 @@ impl Engine {
         }
         self.restarting
             .store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = self.flush_transfer_stats();
         let old = self.session.write().take();
         if let Some(old) = old {
             info!("stopping session");
@@ -1149,6 +1154,7 @@ impl Engine {
             self.meta.insert(&id, meta);
             let _ = self.meta.save();
             self.reconcile(&handle);
+            self.record_transfer(&handle);
             self.emit(Event::Added {
                 id: id.clone(),
                 name: handle.name().unwrap_or_else(|| id.clone()),
@@ -1366,6 +1372,7 @@ impl Engine {
             trackers,
             comment: None,
             private: info.private,
+            transfer: meta.transfer.snapshot(),
             summary,
         })
     }
@@ -1436,6 +1443,7 @@ impl Engine {
 
     pub async fn pause(&self, id: &str) -> anyhow::Result<()> {
         let h = self.handle(id)?;
+        self.record_transfer(&h);
         self.meta.update(id, |m| m.user_paused = true);
         let _ = self.meta.save();
         // While checking files the torrent can't be paused yet; the tick's
@@ -1443,11 +1451,14 @@ impl Engine {
         if matches!(h.stats().state, TorrentStatsState::Live) {
             self.session()?.pause(&h).await?;
         }
+        self.record_transfer(&h);
+        let _ = self.meta.save();
         Ok(())
     }
 
     pub async fn resume(&self, id: &str) -> anyhow::Result<()> {
         let h = self.handle(id)?;
+        self.record_transfer(&h);
         // Starting a torrent whose files were all deleted / skipped downloads it again.
         let all_skipped = {
             let m = self.meta.get(id).unwrap_or_default();
@@ -1463,6 +1474,7 @@ impl Engine {
         if matches!(h.stats().state, TorrentStatsState::Paused) && !self.global_pause.lock().any() {
             self.session()?.unpause(&h).await?;
         }
+        self.record_transfer(&h);
         Ok(())
     }
 
@@ -1846,36 +1858,7 @@ impl Engine {
             self.sync_run_state(&h);
             let id = hash_str(&h.info_hash());
             let stats = h.stats();
-            let Some(live) = stats.live.as_ref() else {
-                continue;
-            };
-            let fetched = live.snapshot.fetched_bytes;
-            let uploaded = live.snapshot.uploaded_bytes;
-            let (d_down, d_up, just_completed) = {
-                let mut ticks = self.ticks.lock();
-                let t = ticks.entry(id.clone()).or_default();
-                let d_down = fetched.saturating_sub(t.last_fetched);
-                let d_up = uploaded.saturating_sub(t.last_uploaded);
-                t.last_fetched = fetched;
-                t.last_uploaded = uploaded;
-                let just_completed = t.seen_unfinished && stats.finished;
-                t.seen_unfinished = !stats.finished;
-                (d_down, d_up, just_completed)
-            };
-            let meta = self.meta.update(&id, |m| {
-                m.total_downloaded += d_down;
-                m.total_uploaded += d_up;
-                if just_completed {
-                    m.completed_at = Some(now_ts());
-                }
-                m.clone()
-            });
-            if just_completed {
-                self.emit(Event::Completed {
-                    id: id.clone(),
-                    name: h.name().unwrap_or_else(|| id.clone()),
-                });
-            }
+            let meta = self.record_transfer(&h);
             if let Some(limit) = ratio_limit
                 && stats.finished
                 && limit > 0.0
@@ -1888,6 +1871,72 @@ impl Engine {
                 self.apply_run_state(&h, &self.meta.get(&id).unwrap_or_default());
             }
         }
+    }
+
+    fn record_transfer(&self, h: &TorrentHandle) -> TorrentMeta {
+        let id = hash_str(&h.info_hash());
+        let stats = h.stats();
+        let active = matches!(stats.state, TorrentStatsState::Live);
+        let now = Instant::now();
+        let mut ticks = self.ticks.lock();
+        let t = ticks.entry(id.clone()).or_default();
+        let elapsed = t
+            .last_at
+            .replace(now)
+            .map(|at| now.duration_since(at).as_millis() as u64)
+            .unwrap_or(0);
+        let (fetched, uploaded, down, up) = stats
+            .live
+            .as_ref()
+            .map(|l| {
+                (
+                    l.snapshot.fetched_bytes,
+                    l.snapshot.uploaded_bytes,
+                    (l.download_speed.mbps * 1024.0 * 1024.0) as u64,
+                    (l.upload_speed.mbps * 1024.0 * 1024.0) as u64,
+                )
+            })
+            .unwrap_or_default();
+        let d_down = fetched.checked_sub(t.last_fetched).unwrap_or(fetched);
+        let d_up = uploaded.checked_sub(t.last_uploaded).unwrap_or(uploaded);
+        let active_ms = if t.was_active || active && (d_down > 0 || d_up > 0) {
+            elapsed
+        } else {
+            0
+        };
+        let downloading = t.was_downloading || d_down > 0;
+        let just_completed = (t.seen_unfinished || d_down > 0) && stats.finished;
+        t.last_fetched = fetched;
+        t.last_uploaded = uploaded;
+        t.was_active = active;
+        t.was_downloading = active && !stats.finished;
+        t.seen_unfinished = !stats.finished;
+        drop(ticks);
+        let (meta, completed_now) = self.meta.update(&id, |m| {
+            m.total_downloaded += d_down;
+            m.total_uploaded += d_up;
+            m.transfer
+                .record(active_ms, downloading, d_down, d_up, (down, up));
+            let completed_now = just_completed && m.completed_at.is_none();
+            if completed_now {
+                m.completed_at = Some(now_ts());
+            }
+            (m.clone(), completed_now)
+        });
+        if completed_now {
+            self.emit(Event::Completed {
+                id,
+                name: h.name().unwrap_or_default(),
+            });
+        }
+        meta
+    }
+
+    pub fn flush_transfer_stats(&self) -> anyhow::Result<()> {
+        for h in self.handles() {
+            self.record_transfer(&h);
+        }
+        self.meta.save()
     }
 
     /// Aggregate download health used by the automatic network mode.

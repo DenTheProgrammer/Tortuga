@@ -90,6 +90,14 @@ export interface TorrentDetails {
   trackers: string[];
   comment: string | null;
   private: boolean;
+  transfer: {
+    active_ms: number;
+    download_ms: number;
+    avg_down_bps: number;
+    avg_up_bps: number;
+    peak_down_bps: number;
+    peak_up_bps: number;
+  };
 }
 
 export interface PeerEntry {

@@ -34,6 +34,7 @@ import {
 import { api, configure, FileEntry, Settings, StateResponse, TorrentSummary } from "./api";
 import { I18nContext, Key, makeT, systemLang } from "./i18n";
 import * as fmt from "./format";
+import { canPause, canStart } from "./torrentActions";
 import {
   backendInfo,
   copyText,
@@ -103,6 +104,7 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
   const [detailsHeight, setDetailsHeight] = useState(() => Number(localStorageGet("tortuga.details")) || 300);
   const toast = useToast();
 
@@ -230,6 +232,8 @@ export default function App() {
   }, [torrents]);
 
   const selectedList = torrents.filter((t) => selected.has(t.id));
+  const startIds = selectedList.filter(canStart).map((t) => t.id);
+  const pauseIds = selectedList.filter(canPause).map((t) => t.id);
   const focused = selectedList.length === 1 ? selectedList[0] : null;
 
   // drop selection of torrents that disappeared
@@ -244,10 +248,15 @@ export default function App() {
 
   // ---- actions ----
   const act = async (fn: (id: string) => Promise<unknown>, ids = [...selected]) => {
+    if (!ids.length || actionBusy) return;
+    setActionBusy(true);
     try {
       await Promise.all(ids.map(fn));
     } catch (e) {
       err(e);
+    } finally {
+      await api.state().then(setState).catch(() => {});
+      setActionBusy(false);
     }
   };
 
@@ -314,8 +323,8 @@ export default function App() {
     const one = list.length === 1 ? list[0] : null;
     const isPending = one && (one.state === "metadata" || (one.state === "error" && !one.size));
     const items: MenuItem[] = [
-      { label: t("start"), icon: <Play />, onClick: () => act(api.resume, ids), disabled: !!isPending },
-      { label: t("pause"), icon: <Pause />, onClick: () => act(api.pause, ids), disabled: !!isPending },
+      { label: t("start"), icon: <Play />, onClick: () => act(api.resume, list.filter(canStart).map((t) => t.id)), disabled: actionBusy || !list.some(canStart) },
+      { label: t("pause"), icon: <Pause />, onClick: () => act(api.pause, list.filter(canPause).map((t) => t.id)), disabled: actionBusy || !list.some(canPause) },
       { separator: true },
       {
         label: t("openFolder"),
@@ -527,16 +536,16 @@ export default function App() {
             <PackagePlus />
           </button>
           <div className="sep" />
-          <button className="icon-btn" title={t("start")} disabled={!selected.size} onClick={() => act(api.resume)}>
+          <button className="icon-btn" title={t("start")} disabled={actionBusy || !startIds.length} onClick={() => act(api.resume, startIds)}>
             <Play />
           </button>
-          <button className="icon-btn" title={t("pause")} disabled={!selected.size} onClick={() => act(api.pause)}>
+          <button className="icon-btn" title={t("pause")} disabled={actionBusy || !pauseIds.length} onClick={() => act(api.pause, pauseIds)}>
             <Pause />
           </button>
           <button
             className="icon-btn"
             title={t("remove")}
-            disabled={!selected.size}
+            disabled={actionBusy || !selectedList.length}
             onClick={() => setConfirmRemove({ ids: [...selected], files: false })}
           >
             <Trash2 />

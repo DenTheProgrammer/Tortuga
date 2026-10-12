@@ -13,6 +13,7 @@ pub mod netguard;
 pub mod rss;
 pub mod server;
 pub mod settings;
+pub mod transfer;
 pub mod util;
 
 pub use engine::{Engine, Event};

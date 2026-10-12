@@ -269,9 +269,11 @@ button {
 }
 
 .icon-btn:disabled {
-  opacity: 0.35;
+  opacity: 0.25;
   cursor: default;
 }
+
+.topbar .icon-btn:not(:disabled) { color: var(--text); }
 
 .icon-btn.on {
   color: var(--accent);
@@ -620,6 +622,13 @@ body.col-resizing * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.stats-heading { margin: 12px 16px 0; font-size: 13px; }
+.stats-hint { margin: 0 16px 12px; color: var(--text-dim); font-size: 11px; }
+.stats-kv { grid-template-columns: 155px minmax(80px, 1fr) 155px minmax(80px, 1fr); }
+@media (max-width: 1050px) {
+  .kv { grid-template-columns: 155px minmax(0, 1fr); }
 }
 
 .piecebar {

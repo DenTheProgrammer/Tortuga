@@ -305,6 +305,7 @@ fn spawn_notifications(app: AppHandle, engine: Arc<Engine>) {
 /// Give the engine a moment to flush resume state.
 async fn stop_engine(app: &AppHandle) {
     let engine = app.state::<AppState>().engine.clone();
+    let _ = engine.flush_transfer_stats();
     if let Ok(s) = engine.session() {
         let _ = tokio::time::timeout(Duration::from_secs(3), s.stop()).await;
     }
@@ -333,6 +334,18 @@ fn main() {
         .init();
 
     let initial_sources = sources_from_args(std::env::args());
+    // Isolated profiles and a localhost API descriptor support reproducible
+    // diagnostics without altering the user's torrent list or settings.
+    let args: Vec<String> = std::env::args().collect();
+    let arg_path = |flag: &str| {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .map(std::path::PathBuf::from)
+    };
+    let profile_dir = arg_path("--data-dir");
+    let api_info_file = arg_path("--api-info-file");
+    let isolated = profile_dir.is_some();
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
@@ -361,10 +374,11 @@ fn main() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .unwrap_or_else(|_| tortuga_core::default_data_dir());
+            let data_dir = profile_dir.clone().unwrap_or_else(|| {
+                app.path()
+                    .app_data_dir()
+                    .unwrap_or_else(|_| tortuga_core::default_data_dir())
+            });
 
             let (engine, addr) = tauri::async_runtime::block_on(async {
                 let engine = Engine::new(data_dir).await?;
@@ -378,6 +392,15 @@ fn main() {
             })?;
 
             let settings = engine.settings();
+            if let Some(path) = api_info_file.as_ref() {
+                tortuga_core::util::write_json_atomic(
+                    path,
+                    &BackendInfo {
+                        base: format!("http://{addr}"),
+                        token: engine.token.clone(),
+                    },
+                )?;
+            }
             app.manage(AppState {
                 backend: BackendInfo {
                     base: format!("http://{addr}"),
@@ -389,7 +412,9 @@ fn main() {
                 quitting: Mutex::new(false),
             });
 
-            if let Err(e) = assoc::register(true) {
+            if !isolated
+                && let Err(e) = assoc::register(true)
+            {
                 tracing::warn!("can't register file associations: {e}");
             }
 
@@ -406,7 +431,9 @@ fn main() {
 
             setup_tray(&handle, engine.clone())?;
             spawn_notifications(handle.clone(), engine.clone());
-            updates::spawn(handle.clone());
+            if !isolated {
+                updates::spawn(handle.clone());
+            }
 
             if !settings.start_minimized || !app.state::<AppState>().pending.lock().is_empty() {
                 show_main(&handle);

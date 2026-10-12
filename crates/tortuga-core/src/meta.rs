@@ -42,6 +42,7 @@ pub struct TorrentMeta {
     /// Lifetime totals across restarts.
     pub total_downloaded: u64,
     pub total_uploaded: u64,
+    pub transfer: crate::transfer::TransferStats,
     /// Magnet / source the torrent was added from, used to show pending/error rows.
     pub source: Option<String>,
 }

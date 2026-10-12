@@ -17,12 +17,17 @@ function looksLikeSeries(files: { path: string; length: number }[]) {
 }
 
 const RECENT_KEY = "tortuga.recentFolders";
-const RECENT_MAX = 8;
+const RECENT_MAX = 5;
+
+function folderKey(dir: string) {
+  const path = dir.trim().replace(/\\/g, "/").replace(/\/$/, "");
+  return /^(?:[a-z]:\/|\/\/)/i.test(path) ? path.toLowerCase() : path;
+}
 
 function recentFolders(): string[] {
   try {
     const v = JSON.parse(localStorageGet(RECENT_KEY) ?? "[]");
-    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+    return Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.trim()).slice(0, RECENT_MAX) : [];
   } catch {
     return [];
   }
@@ -31,26 +36,33 @@ function recentFolders(): string[] {
 function rememberFolder(dir: string) {
   const d = dir.trim();
   if (!d) return;
-  const next = [d, ...recentFolders().filter((x) => x !== d)].slice(0, RECENT_MAX);
+  const next = [d, ...recentFolders().filter((x) => folderKey(x) !== folderKey(d))].slice(0, RECENT_MAX);
   localStorageSet(RECENT_KEY, JSON.stringify(next));
+  return next;
 }
 
 /** Save folder: free text, a folder picker, and the last used folders. */
 function FolderField({ value, defaultDir, onChange }: { value: string; defaultDir: string; onChange: (v: string) => void }) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
-  const options = useMemo(() => [...new Set([defaultDir, ...recentFolders()])].filter(Boolean), [defaultDir]);
+  const [folders, setFolders] = useState(recentFolders);
+  const options = useMemo(() => [...folders, defaultDir].filter((p, i, all) => p && all.findIndex((x) => folderKey(x) === folderKey(p)) === i).slice(0, RECENT_MAX), [defaultDir, folders]);
+  const choose = (path: string) => {
+    onChange(path);
+    setFolders(rememberFolder(path) ?? []);
+    setOpen(false);
+  };
   return (
     <div className="folder-field">
       <div className="row-flex">
         <input className="input" value={value} onChange={(e) => onChange(e.target.value)} />
-        {options.length > 1 && (
-          <button className="icon-btn" title={t("recentFolders")} onClick={() => setOpen((o) => !o)}>
+        {options.length > 0 && (
+          <button className="icon-btn" title={t("recentFolders")} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
             <ChevronDown />
           </button>
         )}
         {isTauri && (
-          <button className="icon-btn" title={t("browse")} onClick={async () => onChange((await pickFolder(value)) ?? value)}>
+          <button className="icon-btn" title={t("browse")} onClick={async () => { const path = await pickFolder(value); if (path) choose(path); }}>
             <FolderOpen />
           </button>
         )}
@@ -63,8 +75,7 @@ function FolderField({ value, defaultDir, onChange }: { value: string; defaultDi
               className={o === value ? "active" : ""}
               title={o}
               onClick={() => {
-                onChange(o);
-                setOpen(false);
+                choose(o);
               }}
             >
               {o}
@@ -103,7 +114,7 @@ export function AddDialog({
   const [resolved, setResolved] = useState<ResolveResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [wanted, setWanted] = useState<Set<number>>(new Set());
-  const [savePath, setSavePath] = useState(settings.download_dir);
+  const [savePath, setSavePath] = useState(() => recentFolders()[0] ?? settings.download_dir);
   const [category, setCategory] = useState("");
   const [sequential, setSequential] = useState(settings.default_sequential);
   const [start, setStart] = useState(!settings.start_paused);

@@ -157,12 +157,26 @@ function PieceBar({ id }: { id: string }) {
 function General({ d }: { d: TorrentDetails }) {
   const { t, lang } = useT();
   const s = d.summary;
+  const rate = (bps: number) => fmt.speed(bps, lang) || `${fmt.bytes(0, lang)}/${lang === "ru" ? "с" : "s"}`;
+  const transferRows: [string, string][] = [
+    [t("status"), t(`st_${s.state}`)],
+    [t("activeTime"), d.transfer.active_ms ? fmt.duration(d.transfer.active_ms / 1000, lang) : lang === "ru" ? "0 с" : "0s"],
+    [t("downloaded"), fmt.bytes(s.downloaded, lang)],
+    [t("uploaded"), fmt.bytes(s.uploaded, lang)],
+    [t("downloadSpeed"), rate(s.down_speed)],
+    [t("uploadSpeed"), rate(s.up_speed)],
+    [t("avgDownloadSpeed"), rate(d.transfer.avg_down_bps)],
+    [t("avgUploadSpeed"), rate(d.transfer.avg_up_bps)],
+    [t("peakDownloadSpeed"), rate(d.transfer.peak_down_bps)],
+    [t("peakUploadSpeed"), rate(d.transfer.peak_up_bps)],
+    [t("eta"), fmt.duration(s.eta, lang) || "—"],
+    [t("ratio"), fmt.ratio(s.ratio)],
+    [t("peers"), `${s.peers} / ${s.peers_seen}`],
+    [t("progress"), `${fmt.bytes(s.done, lang)} / ${fmt.bytes(s.size, lang)} (${fmt.percent(s.progress)})`],
+  ];
   const rows: [string, string][] = [
     [t("savePath"), s.save_path],
     [t("totalSize"), fmt.bytes(d.total_size, lang)],
-    [t("downloaded"), fmt.bytes(s.downloaded, lang)],
-    [t("uploaded"), fmt.bytes(s.uploaded, lang)],
-    [t("ratio"), fmt.ratio(s.ratio)],
     [t("pieces"), `${d.pieces} × ${fmt.bytes(d.piece_length, lang)}`],
     [t("addedAt"), fmt.date(s.added_at, lang)],
     [t("completedAt"), fmt.date(s.completed_at, lang)],
@@ -172,6 +186,12 @@ function General({ d }: { d: TorrentDetails }) {
   return (
     <div>
       <PieceBar id={d.info_hash} />
+      <h3 className="stats-heading">{t("transferStats")}</h3>
+      <div className="kv stats-kv">
+        {transferRows.map(([k, v]) => <div key={k} style={{ display: "contents" }}><div className="k">{k}</div><div className="v" title={v}>{v}</div></div>)}
+      </div>
+      <div className="stats-hint">{t("transferStatsHint")}</div>
+      <h3 className="stats-heading">{t("general")}</h3>
       <div className="kv">
         {rows.map(([k, v]) => (
           <div key={k} style={{ display: "contents" }}>
