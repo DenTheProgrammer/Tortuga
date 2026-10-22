@@ -756,6 +756,11 @@ impl Session {
                     utp_socket: listen_result.as_ref().and_then(|l| l.utp_socket.clone()),
                     bind_device: bind_device.clone(),
                     ipv4_only: opts.ipv4_only,
+                    encryption: opts
+                        .connect
+                        .as_ref()
+                        .map(|c| c.encryption)
+                        .unwrap_or_default(),
                 })
                 .await
                 .context("error creating stream connector")?,

@@ -4,7 +4,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{Error, Result, session::CheckedIncomingConnection, stream_connect::ConnectionKind};
+use crate::{
+    Error, Result, mse::EncryptionMode, session::CheckedIncomingConnection,
+    stream_connect::ConnectionKind,
+};
 use buffers::{ByteBuf, ByteBufOwned};
 use futures::TryFutureExt;
 use librqbit_core::{
@@ -216,29 +219,68 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
             .connect_timeout
             .unwrap_or_else(|| Duration::from_secs(10));
 
+        let mut write_buf = Box::new([0u8; MAX_MSG_LEN]);
+        let handshake = Handshake::new(self.info_hash, self.peer_id);
+        let hsz = handshake.serialize_unchecked_len(&mut *write_buf);
+        let handshake_bytes = &write_buf[..hsz];
+
         let now = Instant::now();
-        let (ckind, mut read, mut write) = with_timeout(
-            "connecting",
-            connect_timeout,
-            self.connector.connect(self.addr),
-        )
-        .await?;
-
-        async move {
+        let connect = || {
+            with_timeout(
+                "connecting",
+                connect_timeout,
+                self.connector.connect(self.addr),
+            )
+        };
+        let plaintext = async || {
+            let (ckind, read, mut write) = connect().await?;
             self.handler.on_connected(now.elapsed());
-
-            let mut write_buf = Box::new([0u8; MAX_MSG_LEN]);
-            let handshake = Handshake::new(self.info_hash, self.peer_id);
-            let hsz = handshake.serialize_unchecked_len(&mut *write_buf);
             with_timeout(
                 "writing",
                 rwtimeout,
                 write
-                    .write_all(&write_buf[..hsz])
+                    .write_all(handshake_bytes)
                     .map_err(Error::WriteHandshake),
             )
             .await?;
+            Ok::<_, Error>((ckind, read, write))
+        };
+        let (ckind, mut read, write) = match self.connector.encryption() {
+            EncryptionMode::Disable => plaintext().await?,
+            mode => {
+                let (ckind, read, write) = connect().await?;
+                self.handler.on_connected(now.elapsed());
+                let encrypted = with_timeout(
+                    "encryption handshake",
+                    rwtimeout,
+                    crate::mse::initiate(
+                        read,
+                        write,
+                        self.info_hash,
+                        handshake_bytes,
+                        // The peer's handshake has the same length as ours.
+                        hsz,
+                    )
+                    .map_err(Error::from),
+                )
+                .await;
+                match encrypted {
+                    Ok((read, write)) => {
+                        trace!("connected with encryption");
+                        (ckind, read, write)
+                    }
+                    // The peer answered but doesn't speak MSE. A timeout more
+                    // likely means a dead peer, retrying won't help.
+                    Err(Error::EncryptionHandshake(e)) if mode == EncryptionMode::Prefer => {
+                        trace!("encryption handshake failed, retrying in plaintext: {e}");
+                        plaintext().await?
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        };
 
+        async move {
             let mut read_buf = ReadBuf::new();
             let h = read_buf.read_handshake(&mut read, rwtimeout).await?;
             let handshake_supports_extended = h.supports_extended();

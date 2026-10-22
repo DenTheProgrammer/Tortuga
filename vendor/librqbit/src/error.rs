@@ -33,6 +33,8 @@ pub enum Error {
 
     #[error("error writing handshake: {0:#}")]
     WriteHandshake(#[source] std::io::Error),
+    #[error("encryption handshake: {0}")]
+    EncryptionHandshake(#[from] crate::mse::HandshakeError),
     #[error("error reading handshake: {0:#}")]
     ReadHandshake(#[source] std::io::Error),
 

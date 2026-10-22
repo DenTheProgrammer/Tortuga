@@ -332,7 +332,7 @@ function Network({ s, set }: P) {
       .network()
       .then((n) => {
         setIfaces(n.snapshot?.interfaces ?? []);
-        setDirectDenied(n.status.reason === "direct_access_denied");
+        setDirectDenied(n.status.reason === "direct_access_denied" || n.status.reason === "auto_bypass_denied");
       })
       .catch(() => {});
   }, []);
@@ -386,6 +386,14 @@ function Network({ s, set }: P) {
       <Check checked={s.utp} onChange={(v) => set("utp", v)}>
         {t("utp")}
       </Check>
+      <Field label={t("encryption")}>
+        <select className="input" value={s.encryption} onChange={(e) => set("encryption", e.target.value as Settings["encryption"])}>
+          <option value="prefer">{t("enc_prefer")}</option>
+          <option value="require">{t("enc_require")}</option>
+          <option value="disable">{t("enc_disable")}</option>
+        </select>
+        <div className="hint">{t("encryptionHint")}</div>
+      </Field>
       <Field label={t("proxy")}>
         <input
           className="input"

@@ -491,6 +491,7 @@ impl Engine {
             }),
             connect: Some(ConnectionOptions {
                 proxy_url: s.proxy_url.clone().filter(|p| !p.trim().is_empty()),
+                encryption: s.encryption,
                 ..Default::default()
             }),
             ratelimits: LimitsConfig::default(),

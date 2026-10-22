@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::net::NetworkMode;
+pub use librqbit::EncryptionMode;
 
 /// What the speed scheduler does in a given hour.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +96,8 @@ pub struct Settings {
     pub peer_limit: u32,
     /// socks5://[user:pass@]host:port
     pub proxy_url: Option<String>,
+    /// Protocol encryption: hides BitTorrent from DPI that drops it (some VPNs).
+    pub encryption: EncryptionMode,
     pub network: NetworkSettings,
 
     // Speed, KiB/s, 0 = unlimited
@@ -133,6 +136,7 @@ impl Default for Settings {
             utp: false,
             peer_limit: 128,
             proxy_url: None,
+            encryption: EncryptionMode::default(),
             network: NetworkSettings::default(),
             download_limit: 0,
             upload_limit: 0,
@@ -182,6 +186,7 @@ impl Settings {
             self.utp,
             self.peer_limit,
             self.proxy_url.clone(),
+            self.encryption,
             self.download_dir.clone(),
         )
     }

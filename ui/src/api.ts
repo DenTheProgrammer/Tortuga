@@ -148,6 +148,7 @@ export interface Settings {
   utp: boolean;
   peer_limit: number;
   proxy_url: string | null;
+  encryption: "prefer" | "require" | "disable";
   network: {
     mode: NetworkMode;
     direct_interface: string | null;

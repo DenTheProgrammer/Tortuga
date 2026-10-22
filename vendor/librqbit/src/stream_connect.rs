@@ -8,6 +8,7 @@ use tracing::debug;
 
 use crate::{
     Error, PeerConnectionOptions, Result,
+    mse::EncryptionMode,
     type_aliases::{BoxAsyncReadVectored, BoxAsyncWrite},
     vectored_traits::AsyncReadVectoredIntoCompat,
 };
@@ -39,6 +40,8 @@ pub struct ConnectionOptions {
     // TCP outgoing connections are enabled by default
     pub enable_tcp: bool,
     pub peer_opts: Option<PeerConnectionOptions>,
+    // Encryption of outgoing peer connections (MSE/PE).
+    pub encryption: EncryptionMode,
 }
 
 impl Default for ConnectionOptions {
@@ -47,6 +50,7 @@ impl Default for ConnectionOptions {
             enable_tcp: true,
             proxy_url: None,
             peer_opts: None,
+            encryption: EncryptionMode::default(),
         }
     }
 }
@@ -65,6 +69,7 @@ pub(crate) struct StreamConnectorArgs {
     pub utp_socket: Option<Arc<UtpSocketUdp>>,
     pub bind_device: Option<BindDevice>,
     pub ipv4_only: bool,
+    pub encryption: EncryptionMode,
 }
 
 impl SocksProxyConfig {
@@ -133,6 +138,7 @@ pub(crate) struct StreamConnector {
     utp_socket: Option<Arc<librqbit_utp::UtpSocketUdp>>,
     stats: ConnectStatsAtomic,
     ipv4_only: bool,
+    encryption: EncryptionMode,
 }
 
 impl StreamConnector {
@@ -158,6 +164,7 @@ impl StreamConnector {
             bind_device: config.bind_device,
             stats: Default::default(),
             ipv4_only: config.ipv4_only,
+            encryption: config.encryption,
         })
     }
 
@@ -201,6 +208,10 @@ impl StreamConnector {
             ),
         )
         .await
+    }
+
+    pub fn encryption(&self) -> EncryptionMode {
+        self.encryption
     }
 
     pub fn stats(&self) -> &ConnectStatsAtomic {

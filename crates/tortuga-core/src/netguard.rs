@@ -209,7 +209,18 @@ pub(crate) async fn evaluate(engine: &Arc<Engine>) {
     let d = {
         let mut d = d;
         if d.route == Route::Direct && direct_access_denied(&d.binding).await {
-            d.reason = "direct_access_denied";
+            if engine.network_mode() == NetworkMode::Auto {
+                // Bypassing would cut torrents off entirely; the VPN at
+                // least passes encrypted traffic.
+                d = Decision {
+                    binding: Binding::default(),
+                    route: Route::System,
+                    interface_name: None,
+                    reason: "auto_bypass_denied",
+                };
+            } else {
+                d.reason = "direct_access_denied";
+            }
         }
         d
     };
