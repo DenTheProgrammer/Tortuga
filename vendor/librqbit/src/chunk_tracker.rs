@@ -302,6 +302,15 @@ impl ChunkTracker {
             .unwrap_or(false)
     }
 
+    /// True if this chunk was already received and written, e.g. by the peer
+    /// a partially downloaded piece was stolen from.
+    pub(crate) fn is_chunk_downloaded(&self, chunk: &ChunkInfo) -> bool {
+        self.chunk_status
+            .get(chunk.absolute_index as usize)
+            .map(|b| *b)
+            .unwrap_or(false)
+    }
+
     pub fn get_remaining_bytes(&self) -> u64 {
         self.hns.needed_bytes
     }

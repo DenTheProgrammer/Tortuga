@@ -1417,7 +1417,8 @@ impl PeerHandler {
     /// Acquire a piece for this peer: try steal (10x) → reserve → steal (3x).
     ///
     /// Returns the piece index to download, or None if no pieces are available.
-    fn acquire_next_piece(&self) -> crate::Result<Option<ValidPieceIndex>> {
+    /// Returns the piece and whether it was stolen from another peer.
+    fn acquire_next_piece(&self) -> crate::Result<Option<(ValidPieceIndex, bool)>> {
         if self.is_choked() {
             debug!("we are choked, can't acquire piece");
             return Ok(None);
@@ -1457,13 +1458,13 @@ impl PeerHandler {
                 match result {
                     AcquireResult::Reserved(piece) => {
                         trace!("reserved piece {}", piece);
-                        Ok(Some(piece))
+                        Ok(Some((piece, false)))
                     }
                     AcquireResult::Stolen { piece, from_peer } => {
                         debug!("stole piece {} from {}", piece, from_peer);
                         // Store steal info to process after releasing peer lock to avoid deadlock
                         steal_info = Some((from_peer, piece));
-                        Ok(Some(piece))
+                        Ok(Some((piece, true)))
                     }
                     AcquireResult::NoneAvailable => Ok(None),
                 }
@@ -1672,7 +1673,7 @@ impl PeerHandler {
 
             // Acquire a piece using the strategy: try steal (10x) → reserve → steal (3x).
             let new_piece_notify = self.state.new_pieces_notify.notified();
-            let next = match self.acquire_next_piece()? {
+            let (next, stolen) = match self.acquire_next_piece()? {
                 Some(next) => next,
                 None => {
                     debug!("no pieces to request");
@@ -1691,6 +1692,19 @@ impl PeerHandler {
             };
 
             for chunk in self.state.lengths.iter_chunk_infos(next) {
+                // The robbed peer may have delivered part of a stolen piece
+                // already; only fetch what's still missing.
+                if stolen
+                    && self
+                        .state
+                        .lock_read("is_chunk_downloaded")
+                        .get_pieces()?
+                        .chunks()
+                        .is_chunk_downloaded(&chunk)
+                {
+                    continue;
+                }
+
                 let request = Request {
                     index: next.get(),
                     begin: chunk.offset,
