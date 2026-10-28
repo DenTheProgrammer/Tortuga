@@ -46,6 +46,11 @@ pub(crate) struct FilePriorities {
     pub order: Vec<usize>,
     /// When set, overrides per-file iteration with an explicit piece order.
     pub piece_order: Option<Vec<u32>>,
+    /// Download stage of every piece, lower comes first: the file's position in
+    /// `order` when sequential, the tier rank when randomized. Once a stage has
+    /// nothing left to reserve it is in its own endgame, even while later
+    /// stages still have queued pieces.
+    pub piece_stage: Vec<u32>,
 }
 
 impl FilePriorities {
@@ -58,9 +63,14 @@ impl FilePriorities {
                 .cmp(&file_infos[*b].relative_filename)
         });
         Self {
+            piece_stage: file_stages(file_infos, &order),
             order,
             piece_order: None,
         }
+    }
+
+    pub fn stage(&self, piece: u32) -> Option<u32> {
+        self.piece_stage.get(piece as usize).copied()
     }
 
     pub fn compute(
@@ -86,6 +96,7 @@ impl FilePriorities {
 
         if config.sequential {
             return Self {
+                piece_stage: file_stages(file_infos, &order),
                 order,
                 piece_order: None,
             };
@@ -107,10 +118,27 @@ impl FilePriorities {
         let mut pieces = (0..num_pieces as u32).collect::<Vec<u32>>();
         pieces.sort_by_key(|p| (std::cmp::Reverse(piece_tier[*p as usize]), mix(*p as u64 ^ seed)));
         Self {
+            piece_stage: piece_tier.iter().map(|t| (u8::MAX - t) as u32).collect(),
             order,
             piece_order: Some(pieces),
         }
     }
+}
+
+/// A piece shared by several files belongs to the earliest of them.
+fn file_stages(file_infos: &FileInfos, order: &[usize]) -> Vec<u32> {
+    let num_pieces = file_infos
+        .iter()
+        .map(|f| f.piece_range.end)
+        .max()
+        .unwrap_or(0) as usize;
+    let mut stage = vec![u32::MAX; num_pieces];
+    for (pos, id) in order.iter().enumerate() {
+        for p in file_infos[*id].piece_range_usize() {
+            stage[p] = stage[p].min(pos as u32);
+        }
+    }
+    stage
 }
 
 /// Compare strings treating runs of digits as numbers ("e2" < "e10"), case-insensitively.
@@ -188,6 +216,7 @@ mod tests {
         let p = FilePriorities::compute(&fi, Some(&cfg), 0);
         assert_eq!(p.order, vec![1, 2, 0]);
         assert!(p.piece_order.is_none());
+        assert_eq!(p.piece_stage, vec![2, 2, 0, 0, 1, 1]);
     }
 
     #[test]

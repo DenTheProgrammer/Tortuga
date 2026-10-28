@@ -115,12 +115,15 @@ impl PieceTracker {
     ///
     /// The acquisition strategy is:
     /// 1. Try to steal a priority (streamed) piece from a peer that's 10x slower
-    /// 2. Try to reserve a piece from the queue (priority pieces first)
+    /// 2. Try to reserve a piece from the queue (priority pieces first), but
+    ///    first steal from a 3x slower peer a piece of an earlier stage
     /// 3. Try to steal any piece from a peer that's 3x slower
     ///
-    /// Non-priority pieces are only stolen once nothing is left to reserve
-    /// (endgame). Stealing earlier doesn't speed anything up while fresh pieces
-    /// remain, but wastes whatever the robbed peer already had in flight.
+    /// Non-priority pieces are only stolen once nothing is left to reserve in
+    /// their stage (endgame). Stealing earlier doesn't speed anything up while
+    /// fresh pieces remain, but wastes whatever the robbed peer already had in
+    /// flight. Stages are per file in sequential mode, so the last pieces of
+    /// one episode don't wait on a slow peer while later episodes download.
     ///
     /// If `Stolen` is returned, the caller MUST call `peers.on_steal()` to notify
     /// the old peer and update counters.
@@ -156,6 +159,15 @@ impl PieceTracker {
             .chunks
             .iter_queued_pieces(req.file_priorities, req.file_infos)
             .collect();
+
+        // Stages before the first queued piece have only in-flight pieces left.
+        let stage = |p: ValidPieceIndex| req.file_priorities.stage(p.get());
+        if let Some(front) = queued.first().and_then(|p| stage(*p))
+            && let Some(result) =
+                self.try_steal(&req, 3.0, |p| stage(p).is_some_and(|s| s < front))
+        {
+            return result;
+        }
 
         for piece in queued {
             if (req.peer_has_piece)(piece) {
@@ -338,9 +350,13 @@ mod tests {
     /// Create a simple ChunkTracker for testing.
     /// Creates a torrent with the specified number of pieces, all selected.
     fn make_test_chunk_tracker(num_pieces: u32) -> ChunkTracker {
-        // Create a simple single-file torrent
+        make_test_chunk_tracker_for(&make_test_file_infos(num_pieces))
+    }
+
+    fn make_test_chunk_tracker_for(file_infos: &FileInfos) -> ChunkTracker {
         let piece_length = 16384u32; // 16KB pieces
-        let total_length = piece_length as u64 * num_pieces as u64;
+        let total_length: u64 = file_infos.iter().map(|f| f.len).sum();
+        let num_pieces = total_length.div_ceil(piece_length as u64) as u32;
 
         let lengths = Lengths::new(total_length, piece_length).unwrap();
 
@@ -355,16 +371,7 @@ mod tests {
             selected.set(i, true);
         }
 
-        // Single file spanning all pieces
-        let file_infos = vec![crate::file_info::FileInfo {
-            relative_filename: "test.dat".into(),
-            offset_in_torrent: 0,
-            len: total_length,
-            piece_range: 0..num_pieces,
-            attrs: Default::default(),
-        }];
-
-        ChunkTracker::new(have.into_dyn(), selected, lengths, &file_infos).unwrap()
+        ChunkTracker::new(have.into_dyn(), selected, lengths, file_infos).unwrap()
     }
 
     fn make_test_file_infos(num_pieces: u32) -> FileInfos {
@@ -380,6 +387,21 @@ mod tests {
 
     fn make_default_file_priorities(file_infos: &FileInfos) -> FilePriorities {
         FilePriorities::upstream_default(file_infos)
+    }
+
+    /// Two files: pieces 0..2 and 2..5.
+    fn make_two_file_infos() -> FileInfos {
+        let piece_length = 16384u64;
+        [("a.mkv", 0..2), ("b.mkv", 2..5)]
+            .into_iter()
+            .map(|(name, range)| crate::file_info::FileInfo {
+                relative_filename: name.into(),
+                offset_in_torrent: piece_length * range.start as u64,
+                len: piece_length * range.len() as u64,
+                piece_range: range,
+                attrs: Default::default(),
+            })
+            .collect()
     }
 
     #[test]
@@ -848,6 +870,45 @@ mod tests {
             other => panic!("expected Reserved, got {other:?}"),
         }
         assert_eq!(tracker.get_inflight(held).unwrap().peer, slow);
+    }
+
+    #[test]
+    fn test_earlier_file_tail_stolen_while_later_files_queued() {
+        let file_infos = make_two_file_infos();
+        let mut tracker = PieceTracker::new(make_test_chunk_tracker_for(&file_infos));
+        let file_priorities = make_default_file_priorities(&file_infos);
+        let slow = peer(1);
+        let fast = peer(2);
+        let mut acquire = |tracker: &mut PieceTracker, peer, avg| {
+            tracker.acquire_piece(AcquireRequest {
+                peer,
+                peer_avg_time: avg,
+                priority_pieces: std::iter::empty(),
+                file_priorities: &file_priorities,
+                file_infos: &file_infos,
+                peer_has_piece: |_| true,
+                can_steal: |_| true,
+            })
+        };
+
+        // The slow peer holds both pieces of the first file.
+        for _ in 0..2 {
+            let AcquireResult::Reserved(p) = acquire(&mut tracker, slow, None) else {
+                panic!("expected Reserved");
+            };
+            assert!(p.get() < 2);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+
+        // The second file still has queued pieces, but the first file would
+        // otherwise never finish, so its tail is taken over.
+        match acquire(&mut tracker, fast, Some(Duration::from_millis(1))) {
+            AcquireResult::Stolen { piece, from_peer } => {
+                assert!(piece.get() < 2);
+                assert_eq!(from_peer, slow);
+            }
+            other => panic!("expected Stolen, got {other:?}"),
+        }
     }
 
     #[test]
