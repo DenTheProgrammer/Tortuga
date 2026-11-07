@@ -1460,7 +1460,31 @@ impl Engine {
         Ok(())
     }
 
-    pub async fn resume(&self, id: &str) -> anyhow::Result<()> {
+    pub async fn resume(self: &Arc<Self>, id: &str) -> anyhow::Result<()> {
+        // A failed metadata lookup or add has no managed handle yet. Retry the
+        // saved request in place, preserving its destination and file selection.
+        let retry = {
+            let mut pending = self.pending.lock();
+            if let Some(p) = pending.get_mut(id) {
+                if p.error.take().is_none() {
+                    return Ok(());
+                }
+                if let Some(task) = p.task.take() {
+                    task.abort();
+                }
+                let mut req = p.req.clone();
+                req.paused = Some(false);
+                Some((req, p.added_at))
+            } else {
+                None
+            }
+        };
+        if let Some((req, added_at)) = retry {
+            self.spawn_pending(id.to_owned(), req, added_at);
+            self.save_pending();
+            return Ok(());
+        }
+
         let h = self.handle(id)?;
         self.record_transfer(&h);
         // Starting a torrent whose files were all deleted / skipped downloads it again.
@@ -1475,7 +1499,12 @@ impl Engine {
         }
         self.meta.update(id, |m| m.user_paused = false);
         let _ = self.meta.save();
-        if matches!(h.stats().state, TorrentStatsState::Paused) && !self.global_pause.lock().any() {
+        // librqbit can reopen storage and recheck existing data after an error.
+        if matches!(
+            h.stats().state,
+            TorrentStatsState::Paused | TorrentStatsState::Error
+        ) && !self.global_pause.lock().any()
+        {
             self.session()?.unpause(&h).await?;
         }
         self.record_transfer(&h);
@@ -1555,7 +1584,11 @@ impl Engine {
 
     /// "Download in order": the given files get high priority and the torrent
     /// switches to sequential mode, so they arrive one after another by name.
-    pub async fn download_in_order(&self, id: &str, files: &[usize]) -> anyhow::Result<()> {
+    pub async fn download_in_order(
+        self: &Arc<Self>,
+        id: &str,
+        files: &[usize],
+    ) -> anyhow::Result<()> {
         let changes: HashMap<usize, FilePriority> =
             files.iter().map(|f| (*f, FilePriority::High)).collect();
         self.meta.update(id, |m| m.sequential = true);
@@ -1591,7 +1624,7 @@ impl Engine {
 
     /// Get a torrent ready for streaming a file: make sure it runs and the file
     /// is selected with high priority.
-    pub async fn prepare_stream(&self, id: &str, file: usize) -> anyhow::Result<()> {
+    pub async fn prepare_stream(self: &Arc<Self>, id: &str, file: usize) -> anyhow::Result<()> {
         let h = self.handle(id)?;
         let n = h
             .metadata
@@ -1657,10 +1690,21 @@ impl Engine {
         last_err.map_or(Ok(()), Err)
     }
 
-    pub async fn resume_all(&self) -> anyhow::Result<()> {
+    pub async fn resume_all(self: &Arc<Self>) -> anyhow::Result<()> {
         let mut last_err = None;
-        for h in self.handles() {
-            let id = hash_str(&h.info_hash());
+        let mut ids: HashSet<String> = self
+            .handles()
+            .iter()
+            .map(|h| hash_str(&h.info_hash()))
+            .collect();
+        ids.extend(
+            self.pending
+                .lock()
+                .iter()
+                .filter(|(_, p)| p.error.is_some())
+                .map(|(id, _)| id.clone()),
+        );
+        for id in ids {
             if let Err(e) = self.resume(&id).await {
                 warn!(%id, "resume failed: {e:#}");
                 last_err = Some(e);
